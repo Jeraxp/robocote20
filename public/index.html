@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <title>Robocote 2.0 — Spike Segfy NJ</title>
+  <style>
+    body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; background: #0f1115; color: #e6e8eb; line-height: 1.55; }
+    h1 { color: #ff6b35; margin-bottom: 0.25rem; }
+    h2 { color: #ffd166; margin-top: 2rem; font-size: 1rem; }
+    p.lead { color: #8b95a3; margin-top: 0; }
+    .panel { background: #161a22; border: 1px solid #232934; padding: 1rem; border-radius: 6px; margin-bottom: 1rem; }
+    .stub { border-color: #5c4d2a; background: #1e1a14; }
+    .stub h2 { color: #c89c4d; }
+    label { display: block; font-size: 0.85rem; color: #8b95a3; margin-bottom: 0.25rem; }
+    input, select, button, textarea { font: inherit; padding: 0.4rem 0.6rem; border-radius: 4px; border: 1px solid #2a3140; background: #0f1115; color: #e6e8eb; margin-right: 0.5rem; }
+    textarea { width: 100%; min-height: 200px; }
+    button { cursor: pointer; background: #ff6b35; color: #0f1115; border-color: #ff6b35; font-weight: bold; }
+    button:hover { background: #ff8757; }
+    button.secondary { background: transparent; color: #ff6b35; }
+    pre { background: #0a0c10; border: 1px solid #232934; padding: 1rem; border-radius: 4px; overflow-x: auto; font-size: 0.8rem; max-height: 400px; overflow-y: auto; }
+    .row { display: flex; gap: 0.5rem; align-items: end; flex-wrap: wrap; }
+    .row > div { flex: 1; min-width: 120px; }
+    .pill { display: inline-block; font-size: 0.7rem; padding: 0.15rem 0.5rem; background: #232934; border-radius: 999px; color: #8b95a3; margin-left: 0.5rem; }
+    .pill.green { background: #1f3329; color: #6cdc9a; }
+    .pill.amber { background: #3e2f12; color: #ffd166; }
+  </style>
+</head>
+<body>
+  <h1>🔥 Robocote 2.0 — Spike Segfy Nova Jornada</h1>
+  <p class="lead">Casa nova de pé. Auth Bearer, token da corretora, catálogo, cálculo, socket.io e DTO seguro validados.</p>
+
+  <div class="panel">
+    <h2>Quote Room <span class="pill green">apresentação consultiva</span></h2>
+    <p class="lead">Primeira tela React para apresentar uma cotação já calculada com DTO seguro do Robocote.</p>
+    <div class="row">
+      <button onclick="location.href='/quote-room'">Abrir Quote Room</button>
+      <button class="secondary" onclick="call('/api/cotacoes/a6c2c899-0fb3-4cc4-81a3-ed8cc6742ea7/resumo', 'out-quote-room')">GET /api/cotacoes/:guid/resumo</button>
+    </div>
+    <pre id="out-quote-room">—</pre>
+  </div>
+
+  <div class="panel">
+    <h2>Webchat F1 <span class="pill green">IA assistida</span></h2>
+    <p class="lead">Conversa com IA: a Vivi interpreta, valida a jornada segura, calcula na Segfy e entrega o Quote Room.</p>
+    <div class="row">
+      <button onclick="location.href='/webchat'">Abrir Webchat F1</button>
+      <button class="secondary" onclick="call('/api/jornadas/auto/f1', 'out-webchat')">GET /api/jornadas/auto/f1</button>
+      <button class="secondary" onclick="callAssistente()">POST /api/assistente/auto/f1/mensagem</button>
+    </div>
+    <pre id="out-webchat">—</pre>
+  </div>
+
+  <div class="panel">
+    <h2>0. Health + Auth <span class="pill green">essencial</span></h2>
+    <div class="row">
+      <button onclick="call('/health', 'out-health')">GET /health</button>
+      <button onclick="call('/test/auth', 'out-health')">GET /test/auth (gera Bearer)</button>
+      <button class="secondary" onclick="call('/test/auth?refresh=1', 'out-health')">Refresh Bearer</button>
+    </div>
+    <pre id="out-health">—</pre>
+  </div>
+
+  <div class="panel">
+    <h2>1. Catálogo: marcas <span class="pill amber">precisa corretora_token</span></h2>
+    <div class="row">
+      <select id="tipo">
+        <option value="carro">carro</option>
+        <option value="moto">moto</option>
+        <option value="caminhao">caminhao</option>
+      </select>
+      <button onclick="getMarcas()">GET /test/marcas/:tipo</button>
+    </div>
+    <pre id="out-marcas">—</pre>
+  </div>
+
+  <div class="panel">
+    <h2>2. Catálogo: modelos <span class="pill amber">precisa corretora_token</span></h2>
+    <div class="row">
+      <div><label>brand_id</label><input id="marca_id" placeholder="UUID da marca na NJ" /></div>
+      <div><label>model_year</label><input id="ano_modelo" type="number" placeholder="2020" /></div>
+      <div><label>vehicle_type</label><select id="vehicle_type"><option value="car">car</option><option value="motorcycle">motorcycle</option><option value="truck">truck</option></select></div>
+      <button onclick="getModelos()">GET /test/modelos</button>
+    </div>
+    <pre id="out-modelos">—</pre>
+  </div>
+
+  <div class="panel">
+    <h2>3. Catálogo: profissões + renovação <span class="pill amber">precisa corretora_token</span></h2>
+    <div class="row">
+      <button onclick="call('/test/profissoes', 'out-apoio')">GET /test/profissoes</button>
+      <button onclick="call('/test/renovacao', 'out-apoio')">GET /test/renovacao</button>
+      <button class="secondary" onclick="call('/test/diagnostico/token-transport', 'out-apoio')">Diagnóstico dry-run</button>
+      <button class="secondary" onclick="call('/test/diagnostico/token-transport?run=1', 'out-apoio')">Rodar diagnóstico token</button>
+    </div>
+    <pre id="out-apoio">—</pre>
+  </div>
+
+  <div class="panel">
+    <h2>4. Cotação completa (socket.io antes do calculate) <span class="pill amber">precisa corretora_token</span></h2>
+    <div class="row">
+      <div style="flex: 1 0 100%;">
+        <label>Payload JSON (12 grupos — vigência, seguro, localização, cliente, veículo, risco, condutor_principal, condutores_adicionais, cobertura, comissao)</label>
+        <textarea id="cot-payload">{
+  "vigencia": {},
+  "seguro": {},
+  "localizacao": {},
+  "cliente": {},
+  "veiculo": {},
+  "risco": {},
+  "condutor_principal": {},
+  "condutores_adicionais": [],
+  "cobertura": {},
+  "comissao": {}
+}</textarea>
+      </div>
+      <div><label>timeoutMs (listener)</label><input id="cot-timeout" type="number" value="30000" /></div>
+      <button onclick="dispararCotacao()">POST /test/cotacao</button>
+    </div>
+    <pre id="out-cotacao">—</pre>
+  </div>
+
+  <div class="panel">
+    <h2>5. Listener avulso (testa socket.io sem cotação)</h2>
+    <div class="row">
+      <div><label>roomId (UUID)</label><input id="roomId" placeholder="qualquer UUID" /></div>
+      <div><label>timeoutMs</label><input id="listen-timeout" type="number" value="15000" /></div>
+      <button onclick="listen()">GET /test/listen/:roomId</button>
+    </div>
+    <pre id="out-listen">—</pre>
+  </div>
+
+  <div class="panel stub">
+    <h2>6. Stubs (não disponíveis na NJ Vehicle)</h2>
+    <div class="row">
+      <div><label>placa</label><input id="placa" placeholder="ABC1D23" /></div>
+      <button onclick="getPlaca()">GET /test/placa/:placa</button>
+      <div><label>cpf</label><input id="cpf" placeholder="00000000000" /></div>
+      <button onclick="getCondutor()">GET /test/condutor/:cpf</button>
+    </div>
+    <pre id="out-stub">—</pre>
+  </div>
+
+  <script>
+    async function call(url, target, opts = {}) {
+      const out = document.getElementById(target);
+      out.textContent = '⏳ ...';
+      try {
+        const r = await fetch(url, opts);
+        const j = await r.json();
+        out.textContent = JSON.stringify(j, null, 2);
+      } catch (e) {
+        out.textContent = 'ERROR: ' + e.message;
+      }
+    }
+    function getMarcas() {
+      call(`/test/marcas/${document.getElementById('tipo').value}`, 'out-marcas');
+    }
+    function getModelos() {
+      const m = document.getElementById('marca_id').value;
+      const a = document.getElementById('ano_modelo').value;
+      const v = document.getElementById('vehicle_type').value;
+      call(`/test/modelos?brand_id=${encodeURIComponent(m)}&model_year=${a}&vehicle_type=${v}`, 'out-modelos');
+    }
+    function dispararCotacao() {
+      const t = document.getElementById('cot-timeout').value;
+      let payload;
+      try {
+        payload = JSON.parse(document.getElementById('cot-payload').value);
+      } catch (e) {
+        document.getElementById('out-cotacao').textContent = 'JSON inválido: ' + e.message;
+        return;
+      }
+      call(`/test/cotacao?timeoutMs=${t}`, 'out-cotacao', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
+    function listen() {
+      const id = document.getElementById('roomId').value;
+      const t = document.getElementById('listen-timeout').value;
+      call(`/test/listen/${encodeURIComponent(id)}?timeoutMs=${t}`, 'out-listen');
+    }
+    function getPlaca() {
+      call(`/test/placa/${encodeURIComponent(document.getElementById('placa').value)}`, 'out-stub');
+    }
+    function getCondutor() {
+      call(`/test/condutor/${encodeURIComponent(document.getElementById('cpf').value)}`, 'out-stub');
+    }
+    function callAssistente() {
+      call('/api/assistente/auto/f1/mensagem', 'out-webchat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: 'Paulo Abel Almeida',
+          snapshot: { stepId: 'name', completed: false, answers: {} },
+          catalogContext: { items: [] }
+        }),
+      });
+    }
+  </script>
+</body>
+</html>

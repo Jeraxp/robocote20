@@ -1,0 +1,37 @@
+{
+  "name": "robocote-2.0-spike",
+  "private": true,
+  "type": "module",
+  "description": "Spike determinístico de exploração da API Segfy pra Robocote 2.0",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "dev:api": "tsx watch src/index.ts",
+    "dev:web": "vite --host 127.0.0.1 --port 5173",
+    "start": "tsx src/index.ts",
+    "typecheck": "npm run typecheck:api && npm run typecheck:web",
+    "typecheck:api": "tsc -p tsconfig.json --noEmit",
+    "typecheck:web": "tsc -p tsconfig.frontend.json --noEmit",
+    "build:web": "vite build",
+    "build": "npm run typecheck && npm run build:web"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "dotenv": "^16.4.7",
+    "hono": "^4.6.14",
+    "lucide-react": "^1.14.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "socket.io-client": "^4.8.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "playwright": "^1.60.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^8.0.12"
+  }
+}

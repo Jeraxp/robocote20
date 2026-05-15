@@ -1,0 +1,89 @@
+# Stack Docker Swarm — Robocote 2.0 mostruário
+# Deploy via Portainer (Stacks → Add stack → Web editor) ou `docker stack deploy`.
+#
+# Pré-requisitos:
+#   - Imagem `robocote/robocote-2:latest` (ou tag específica) disponível em algum registry.
+#   - Network overlay `network_public` existente no swarm (já usada por Traefik + Evolution).
+#   - DNS A record `${ROBOCOTE_HOST}` apontando pra IP do swarm (5.161.253.111).
+#   - Variáveis de ambiente preenchidas (ver deploy/README.md).
+#
+# Subdomínio: por padrão `rcdemo.robocote.com.br`. Trocar via env `ROBOCOTE_HOST` no Portainer.
+
+version: "3.8"
+
+services:
+  robocote-2:
+    image: ${ROBOCOTE_IMAGE:-robocote/robocote-2:latest}
+    networks:
+      - network_public
+    environment:
+      # Servidor
+      PORT: "3030"
+      NODE_ENV: "production"
+
+      # Segfy Nova Jornada
+      SEGFY_BASE_URL: "${SEGFY_BASE_URL:-https://api.automation.segfy.com}"
+      SEGFY_SOCKET_URL: "${SEGFY_SOCKET_URL:-https://socket-io.segfy.com}"
+      SEGFY_CLIENT_ID: "${SEGFY_CLIENT_ID}"
+      SEGFY_CLIENT_SECRET: "${SEGFY_CLIENT_SECRET}"
+      RPI_CORRETORA_TOKEN: "${RPI_CORRETORA_TOKEN}"
+
+      # Taskdun AI (OpenAI-compatível)
+      TASKDUN_AI_BASE_URL: "${TASKDUN_AI_BASE_URL}"
+      TASKDUN_AI_CHAT_PATH: "${TASKDUN_AI_CHAT_PATH:-/v1/chat/completions}"
+      TASKDUN_AI_API_KEY: "${TASKDUN_AI_API_KEY}"
+      ROBOCOTE_EXTRACTOR_MODEL: "${ROBOCOTE_EXTRACTOR_MODEL:-gpt-5.4-mini}"
+      ROBOCOTE_DIALOG_MODEL: "${ROBOCOTE_DIALOG_MODEL:-gpt-5.3-chat-latest}"
+      ROBOCOTE_ANALYST_MODEL: "${ROBOCOTE_ANALYST_MODEL:-gpt-5.4}"
+
+      # RAG (pendente curadoria)
+      ROBOCOTE_EMBEDDING_MODEL: "${ROBOCOTE_EMBEDDING_MODEL:-text-embedding-3-large}"
+      ROBOCOTE_VECTOR_STORE_ID: "${ROBOCOTE_VECTOR_STORE_ID:-}"
+      ROBOCOTE_RAG_MAX_RESULTS: "${ROBOCOTE_RAG_MAX_RESULTS:-5}"
+
+      # Evolution API (mesma instância do swarm)
+      EVOLUTION_BASE_URL: "${EVOLUTION_BASE_URL:-https://rcevoapi.robocote.com.br}"
+      EVOLUTION_API_KEY: "${EVOLUTION_API_KEY}"
+      EVOLUTION_INSTANCE: "${EVOLUTION_INSTANCE:-Robocote2}"
+      EVOLUTION_WEBHOOK_SECRET: "${EVOLUTION_WEBHOOK_SECRET}"
+
+      # Identidade do tenant + link público do Quote Room (vai no WhatsApp)
+      ROBOCOTE_TENANT_ID: "${ROBOCOTE_TENANT_ID:-rpi}"
+      ROBOCOTE_QUOTE_BASE_URL: "${ROBOCOTE_QUOTE_BASE_URL:-https://rcdemo.robocote.com.br}"
+
+      # Debug (desligar em produção real)
+      ROBOCOTE_DEBUG_ROUTER: "${ROBOCOTE_DEBUG_ROUTER:-0}"
+
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+      update_config:
+        parallelism: 1
+        order: start-first
+        failure_action: rollback
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+      labels:
+        # Traefik routing — mesmo padrão dos outros serviços do swarm.
+        - "traefik.enable=true"
+        - "traefik.docker.network=network_public"
+        - "traefik.http.routers.robocote-2.rule=Host(`${ROBOCOTE_HOST:-rcdemo.robocote.com.br}`)"
+        - "traefik.http.routers.robocote-2.entrypoints=websecure"
+        - "traefik.http.routers.robocote-2.tls=true"
+        - "traefik.http.routers.robocote-2.tls.certresolver=letsencryptresolver"
+        - "traefik.http.routers.robocote-2.priority=1"
+        - "traefik.http.services.robocote-2.loadbalancer.server.port=3030"
+        - "traefik.http.services.robocote-2.loadbalancer.passHostHeader=true"
+
+networks:
+  network_public:
+    external: true

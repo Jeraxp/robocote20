@@ -32,7 +32,7 @@ const ROBOCOTE_QUOTE_BASE_URL = process.env.ROBOCOTE_QUOTE_BASE_URL?.trim() ?? '
 const ROBOCOTE_TENANT_ID = process.env.ROBOCOTE_TENANT_ID?.trim() || 'rpi';
 
 const GREETING_LINES = [
-  'Olá! Eu sou a Vivi, corretora digital da Robocote 🚗',
+  'Olá! Eu sou o Robocote, o seu corretor digital inteligente.',
   'Vou te ajudar a cotar seu seguro auto numa conversa simples. Pode responder do seu jeito.',
   'Pra começar, qual é seu nome completo?',
 ];

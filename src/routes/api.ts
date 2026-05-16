@@ -1,8 +1,17 @@
 import { Hono } from 'hono';
+import { createHash } from 'crypto';
 import { getQuoteSummary, type QuoteCustomerInfo, type CoveragePreference } from '../quote/summary.js';
 import { autoF1QuoteRequestSchema, runAutoF1Quote } from '../journey/autoF1.js';
 import { handleAutoF1AssistantMessage, parseAssistantRequest } from '../assistant/autoF1.js';
 import { parseRagSearchRequest, searchKnowledge } from '../assistant/rag.js';
+import {
+  appendSessionInteraction,
+  createInitialSessionState,
+  sessionStore,
+  type PipelineStage,
+  type SessionAnswer,
+  type SessionState,
+} from '../session/store.js';
 
 export const api = new Hono();
 
@@ -10,6 +19,7 @@ export const api = new Hono();
 // Suficiente pro spike; quando F4 entrar com Postgres, vira tabela `quote_meta`.
 const QUOTE_CUSTOMER_CACHE = new Map<string, { info: QuoteCustomerInfo; expiresAt: number }>();
 const QUOTE_CUSTOMER_TTL_MS = 1000 * 60 * 60 * 24; // 24h
+const ROBOCOTE_TENANT_ID = process.env.ROBOCOTE_TENANT_ID?.trim() || 'rpi';
 
 function cacheCustomerForGuid(guid: string, info: QuoteCustomerInfo): void {
   QUOTE_CUSTOMER_CACHE.set(guid, { info, expiresAt: Date.now() + QUOTE_CUSTOMER_TTL_MS });
@@ -32,6 +42,208 @@ function normalizeCoveragePreference(value: string | undefined): CoveragePrefere
   if (normalized.includes('equilib') || normalized.includes('equilíb')) return 'Equilíbrio';
   if (normalized.includes('prote') || normalized.includes('protec')) return 'Proteção';
   return null;
+}
+
+const PANEL_STEP_ORDER = [
+  'name',
+  'vehicle_brand',
+  'vehicle_year',
+  'vehicle_model',
+  'usage',
+  'renewal_status',
+  'zip_code',
+  'residence_type',
+  'residence_garage',
+  'marital_status',
+  'coverage',
+  'contact',
+  'driver_birth_date',
+  'driver_sex',
+  'document',
+  'quote_link',
+] as const;
+
+const PANEL_LABELS: Record<string, string> = {
+  name: 'Nome',
+  vehicle_brand: 'Marca',
+  vehicle_year: 'Ano',
+  vehicle_model: 'Modelo',
+  usage: 'Uso',
+  renewal_status: 'Renovação',
+  zip_code: 'CEP',
+  residence_type: 'Residência',
+  residence_garage: 'Garagem',
+  marital_status: 'Estado civil',
+  coverage: 'Perfil',
+  contact: 'Contato',
+  source: 'Origem',
+  vehicle_hint: 'Veículo informado',
+  notes: 'Observações',
+  driver_birth_date: 'Nascimento',
+  driver_sex: 'Sexo',
+  document: 'CPF',
+  quote_link: 'Cotação',
+};
+
+const PIPELINE_STAGES: Array<{ key: PipelineStage; label: string }> = [
+  { key: 'novos_leads', label: 'Novos Leads' },
+  { key: 'contatados', label: 'Contatados' },
+  { key: 'em_negociacao', label: 'Em Negociação' },
+  { key: 'sem_retorno', label: 'Sem Retorno' },
+  { key: 'vendas', label: 'Vendas' },
+  { key: 'perdido', label: 'Perdido' },
+];
+
+function stableLeadId(session: SessionState): string {
+  return createHash('sha256')
+    .update(`${session.tenantId}:${session.channel}:${session.channelUserId}`)
+    .digest('hex')
+    .slice(0, 18);
+}
+
+function maskSensitive(value: string): string {
+  return value
+    .replace(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, '<CPF protegido>')
+    .replace(/\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g, '<CNPJ protegido>')
+    .replace(/\b\d{5}-?\d{3}\b/g, '<CEP protegido>')
+    .replace(/\b(?:\+?55\s*)?\(?\d{2}\)?\s?9?\d{4}-?\d{4}\b/g, '<telefone protegido>');
+}
+
+function maskChannelUser(value: string): string {
+  const digits = value.replace(/\D/g, '');
+  if (digits.length < 4) return '<canal protegido>';
+  const tail = digits.slice(-4);
+  if (digits.startsWith('55') && digits.length >= 12) return `+55 ** *****-${tail}`;
+  return `(**) *****-${tail}`;
+}
+
+function firstNameFrom(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.split(/\s+/)[0] ?? null;
+}
+
+function cleanText(value: unknown, maxLength: number): string {
+  if (typeof value !== 'string') return '';
+  return value.trim().replace(/\s+/g, ' ').slice(0, maxLength);
+}
+
+function normalizeManualPhone(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const digits = value.replace(/\D/g, '');
+  if (digits.length < 10 || digits.length > 13) return '';
+  return digits.startsWith('55') ? digits : `55${digits}`;
+}
+
+function manualAnswer(id: string, label: string, value: string): SessionAnswer {
+  return { id, label, value, rawValue: value };
+}
+
+function sanitizeAnswer(answer: SessionAnswer): { id: string; label: string; value: string } {
+  const label = PANEL_LABELS[answer.id] ?? answer.label ?? answer.id;
+  const raw = answer.value || answer.rawValue || '';
+  const sensitive = answer.id === 'document' || answer.id === 'contact' || answer.id === 'zip_code';
+  return {
+    id: answer.id,
+    label,
+    value: sensitive ? maskSensitive(raw) : maskSensitive(raw),
+  };
+}
+
+function leadProgress(session: SessionState): number {
+  if (session.completed || session.stepId === 'complete') return 100;
+  const index = PANEL_STEP_ORDER.indexOf(session.stepId as (typeof PANEL_STEP_ORDER)[number]);
+  if (index < 0) return 0;
+  const answeredSteps = PANEL_STEP_ORDER.filter((step) => Boolean(session.answers[step])).length;
+  return Math.round((answeredSteps / PANEL_STEP_ORDER.length) * 100);
+}
+
+function leadStatus(session: SessionState): { key: string; label: string } {
+  if (session.completed || session.stepId === 'complete') return { key: 'quoted', label: 'Cotação entregue' };
+  if (session.lastGuid) return { key: 'quoted', label: 'Cotação entregue' };
+  if (session.stepId === 'quote_link') return { key: 'ready', label: 'Pronto para calcular' };
+  if (session.pendingProposal) return { key: 'waiting', label: 'Aguardando confirmação' };
+  return { key: 'active', label: 'Em atendimento' };
+}
+
+function stageLabel(stage: PipelineStage): string {
+  return PIPELINE_STAGES.find((item) => item.key === stage)?.label ?? 'Novos Leads';
+}
+
+function inferredStage(session: SessionState): PipelineStage {
+  if (session.completed || session.stepId === 'complete' || session.lastGuid) {
+    return 'em_negociacao';
+  }
+  if (session.interactions?.some((item) => item.direction === 'outbound')) {
+    return 'contatados';
+  }
+  return 'novos_leads';
+}
+
+function commercialStage(session: SessionState): { key: PipelineStage; label: string } {
+  const key = session.pipelineStage ?? inferredStage(session);
+  return { key, label: stageLabel(key) };
+}
+
+function sessionVehicle(session: SessionState): string {
+  const brand = session.answers.vehicle_brand?.value;
+  const model = session.answers.vehicle_model?.value;
+  const year = session.answers.vehicle_year?.value;
+  const structured = [brand, model, year].filter(Boolean).join(' · ');
+  return structured || session.answers.vehicle_hint?.value || 'Veículo em coleta';
+}
+
+function sessionDisplayName(session: SessionState): string {
+  return session.answers.name?.value || session.customerFirstName || 'Lead WhatsApp';
+}
+
+function serializeLead(session: SessionState) {
+  const status = leadStatus(session);
+  const stage = commercialStage(session);
+  const interactions = (session.interactions ?? []).map((interaction) => ({
+    id: interaction.id,
+    at: new Date(interaction.at).toISOString(),
+    direction: interaction.direction,
+    text: maskSensitive(interaction.text),
+    action: interaction.action ?? null,
+    stepId: interaction.stepId ?? null,
+    quoteGuid: interaction.quoteGuid ?? null,
+  }));
+  const latestInteraction = interactions.at(-1);
+  const answers = Object.values(session.answers).map(sanitizeAnswer);
+
+  return {
+    id: stableLeadId(session),
+    tenantId: session.tenantId,
+    channel: session.channel,
+    channelUser: maskChannelUser(session.channelUserId),
+    name: maskSensitive(sessionDisplayName(session)),
+    firstName: session.customerFirstName,
+    status,
+    stage,
+    stepId: session.stepId,
+    stepLabel: PANEL_LABELS[session.stepId] ?? session.stepId,
+    progress: leadProgress(session),
+    vehicle: sessionVehicle(session),
+    coveragePreference: session.coveragePreference,
+    quoteGuid: session.lastGuid,
+    quoteRoomPath: session.lastGuid ? `/quote-room/${session.lastGuid}` : null,
+    createdAt: new Date(session.createdAt).toISOString(),
+    updatedAt: new Date(session.updatedAt).toISOString(),
+    answers,
+    interactions,
+    latestMessage: latestInteraction?.text ?? null,
+  };
+}
+
+function panelMetrics(leads: ReturnType<typeof serializeLead>[]) {
+  return {
+    total: leads.length,
+    active: leads.filter((lead) => lead.status.key === 'active').length,
+    ready: leads.filter((lead) => lead.status.key === 'ready').length,
+    quoted: leads.filter((lead) => lead.status.key === 'quoted').length,
+    waiting: leads.filter((lead) => lead.status.key === 'waiting').length,
+  };
 }
 
 api.get('/jornadas/auto/f1', (c) =>
@@ -237,4 +449,99 @@ api.post('/assistente/rag/search', async (c) => {
       400,
     );
   }
+});
+
+api.get('/painel/leads', async (c) => {
+  const sessions = await sessionStore.list();
+  const leads = sessions.map(serializeLead);
+  return c.json({
+    ok: true,
+    metrics: panelMetrics(leads),
+    leads,
+    ts: new Date().toISOString(),
+  });
+});
+
+api.post('/painel/leads/manual', async (c) => {
+  const body = await c.req.json().catch(() => null) as {
+    name?: string;
+    phone?: string;
+    source?: string;
+    vehicleHint?: string;
+    notes?: string;
+    stage?: string;
+  } | null;
+
+  const name = cleanText(body?.name, 120);
+  const phone = normalizeManualPhone(body?.phone);
+  const source = cleanText(body?.source, 80);
+  const vehicleHint = cleanText(body?.vehicleHint, 160);
+  const notes = cleanText(body?.notes, 600);
+  const stage = (body?.stage ?? 'novos_leads') as PipelineStage;
+
+  if (!name) {
+    return c.json({ ok: false, error: 'nome do lead é obrigatório' }, 400);
+  }
+  if (!phone) {
+    return c.json({ ok: false, error: 'WhatsApp válido é obrigatório' }, 400);
+  }
+  if (!PIPELINE_STAGES.some((item) => item.key === stage)) {
+    return c.json({ ok: false, error: 'stage inválido' }, 400);
+  }
+
+  const key = { tenantId: ROBOCOTE_TENANT_ID, channel: 'whatsapp' as const, channelUserId: phone };
+  const existing = await sessionStore.get(key);
+  const base = existing ?? createInitialSessionState(key);
+  const answers: Record<string, SessionAnswer> = {
+    ...base.answers,
+    name: manualAnswer('name', 'Nome', name),
+    contact: manualAnswer('contact', 'Contato', phone),
+  };
+
+  if (source) answers.source = manualAnswer('source', 'Origem', source);
+  if (vehicleHint) answers.vehicle_hint = manualAnswer('vehicle_hint', 'Veículo informado', vehicleHint);
+  if (notes) answers.notes = manualAnswer('notes', 'Observações', notes);
+
+  const noteLines = [
+    existing ? 'Lead atualizado manualmente no painel.' : 'Lead cadastrado manualmente no painel.',
+    source ? `Origem: ${source}` : null,
+    vehicleHint ? `Veículo informado: ${vehicleHint}` : null,
+    notes ? `Observação: ${notes}` : null,
+  ].filter(Boolean).join('\n');
+
+  const nextState = appendSessionInteraction({
+    ...base,
+    answers,
+    customerFirstName: firstNameFrom(name),
+    pipelineStage: stage,
+    stepId: base.completed ? base.stepId : 'vehicle_brand',
+    completed: base.completed,
+  }, {
+    direction: 'system',
+    text: noteLines,
+    action: existing ? 'manual_update' : 'manual_create',
+    stepId: base.completed ? base.stepId : 'vehicle_brand',
+    quoteGuid: base.lastGuid,
+  });
+
+  const updated = await sessionStore.upsert(nextState);
+  return c.json({ ok: true, lead: serializeLead(updated) }, existing ? 200 : 201);
+});
+
+api.patch('/painel/leads/:id/stage', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json().catch(() => null) as { stage?: string } | null;
+  const stage = body?.stage as PipelineStage | undefined;
+  if (!stage || !PIPELINE_STAGES.some((item) => item.key === stage)) {
+    return c.json({ ok: false, error: 'stage inválido' }, 400);
+  }
+
+  const sessions = await sessionStore.list();
+  const session = sessions.find((item) => stableLeadId(item) === id);
+  if (!session) {
+    return c.json({ ok: false, error: 'lead não encontrado' }, 404);
+  }
+
+  const updated = await sessionStore.upsert({ ...session, pipelineStage: stage });
+  return c.json({ ok: true, lead: serializeLead(updated) });
 });

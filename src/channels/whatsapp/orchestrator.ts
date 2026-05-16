@@ -21,6 +21,7 @@ import { loadCatalogForStep } from '../../catalog/auto.js';
 import {
   sessionStore,
   createInitialSessionState,
+  appendSessionInteraction,
   type SessionState,
   type SessionKey,
 } from '../../session/store.js';
@@ -39,7 +40,9 @@ const GREETING_LINES = [
 function maskCpfPii(value: string): string {
   return value
     .replace(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, '<CPF protegido>')
-    .replace(/\b\d{5}-?\d{3}\b/g, '<CEP protegido>');
+    .replace(/\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g, '<CNPJ protegido>')
+    .replace(/\b\d{5}-?\d{3}\b/g, '<CEP protegido>')
+    .replace(/\b(?:\+?55\s*)?\(?\d{2}\)?\s?9?\d{4}-?\d{4}\b/g, '<telefone protegido>');
 }
 
 function normalizeMsg(value: string): string {
@@ -78,6 +81,45 @@ const PROGRESS_NUDGE_MS = 15_000;
 function buildQuoteLink(guid: string): string {
   if (!ROBOCOTE_QUOTE_BASE_URL) return `/quote-room/${guid}`;
   return `${ROBOCOTE_QUOTE_BASE_URL.replace(/\/$/, '')}/quote-room/${guid}`;
+}
+
+function recordInbound(
+  session: SessionState,
+  inbound: EvolutionInboundMessage,
+  action: string,
+): SessionState {
+  return appendSessionInteraction(session, {
+    direction: 'inbound',
+    text: maskCpfPii(inbound.text),
+    action,
+    stepId: session.stepId,
+    quoteGuid: session.lastGuid,
+  });
+}
+
+function recordOutbound(
+  session: SessionState,
+  text: string,
+  action: string,
+  quoteGuid: string | null = session.lastGuid,
+): SessionState {
+  return appendSessionInteraction(session, {
+    direction: 'outbound',
+    text: maskCpfPii(text),
+    action,
+    stepId: session.stepId,
+    quoteGuid,
+  });
+}
+
+function recordTurn(
+  session: SessionState,
+  inbound: EvolutionInboundMessage,
+  reply: string,
+  action: string,
+  quoteGuid: string | null = session.lastGuid,
+): SessionState {
+  return recordOutbound(recordInbound(session, inbound, action), reply, action, quoteGuid);
 }
 
 function answersFromSession(session: SessionState): AutoF1QuoteRequest['answers'] {
@@ -166,14 +208,16 @@ export async function processWhatsappTurn(
   if (isNew) {
     const greeting = GREETING_LINES.join('\n\n');
     await sendWhatsappText(inbound.fromPhone, greeting);
-    return { replySent: greeting, action: 'greet', sessionAfter: session };
+    const persisted = await sessionStore.upsert(recordTurn(session, inbound, greeting, 'greet'));
+    return { replySent: greeting, action: 'greet', sessionAfter: persisted };
   }
 
   if (session.completed) {
     // Pós-cotação ainda não tem fluxo dedicado. Resposta gentil temporária.
     const reply = 'Sua cotação tá pronta acima. Em breve eu vou poder te explicar as opções por aqui também — por enquanto, dá uma olhada no link que mandei.';
     await sendWhatsappText(inbound.fromPhone, reply);
-    return { replySent: reply, action: 'none', sessionAfter: session };
+    const persisted = await sessionStore.upsert(recordTurn(session, inbound, reply, 'none'));
+    return { replySent: reply, action: 'none', sessionAfter: persisted };
   }
 
   // ─── P1 — Proposta pendente aguardando confirmação ──────────────────────────────
@@ -185,23 +229,23 @@ export async function processWhatsappTurn(
 
     if (looksLikeConfirmation(inbound.text)) {
       const advanced = applyProposalAndAdvance(session, pending);
-      const persisted = await sessionStore.upsert(advanced);
-      const next = persisted.stepId;
+      const next = advanced.stepId;
       const ack = `Anotei: ${pending.displayLabel ?? pending.value}.`;
       const followUp = next !== 'complete' && STEP_PROMPT[next as StepId]
         ? `\n\n${STEP_PROMPT[next as StepId]}`
         : '';
       const reply = `${ack}${followUp}`;
       await sendWhatsappText(inbound.fromPhone, reply);
+      const persisted = await sessionStore.upsert(recordTurn(advanced, inbound, reply, 'answer_step'));
       return { replySent: reply, action: 'answer_step', sessionAfter: persisted };
     }
 
     if (looksLikeDenial(inbound.text)) {
-      const cleared = await sessionStore.upsert({ ...session, pendingProposal: null });
       const currentStep = session.stepId === 'complete' ? 'quote_link' : session.stepId;
       const prompt = STEP_PROMPT[currentStep as StepId] ?? 'Me passa o dado de novo, por favor.';
       const reply = `Beleza, vou refazer. ${prompt}`;
       await sendWhatsappText(inbound.fromPhone, reply);
+      const cleared = await sessionStore.upsert(recordTurn({ ...session, pendingProposal: null }, inbound, reply, 'ask_clarification'));
       return { replySent: reply, action: 'ask_clarification', sessionAfter: cleared };
     }
 
@@ -217,10 +261,13 @@ export async function processWhatsappTurn(
       const link = buildQuoteLink(session.lastGuid);
       const reply = `Sua cotação ainda tá fresca aqui — pode abrir:\n${link}`;
       await sendWhatsappText(inbound.fromPhone, reply);
-      return { replySent: reply, action: 'none', sessionAfter: session };
+      const persisted = await sessionStore.upsert(recordTurn(session, inbound, reply, 'none', session.lastGuid));
+      return { replySent: reply, action: 'none', sessionAfter: persisted };
     }
 
-    await sendWhatsappText(inbound.fromPhone, 'Fechado, vou calcular agora — isso leva uns segundos.');
+    const startReply = 'Fechado, vou calcular agora — isso leva uns segundos.';
+    await sendWhatsappText(inbound.fromPhone, startReply);
+    let calculatingSession = recordOutbound(recordInbound(session, inbound, 'calculate'), startReply, 'calculate');
 
     // ─── P5 — Nudge de progresso se Segfy demorar > 15s ──────────────────────────────
     const progressTimer = setTimeout(() => {
@@ -237,17 +284,22 @@ export async function processWhatsappTurn(
     if (!calc) {
       const fail = 'Não consegui concluir a cotação agora. Posso tentar novamente em alguns instantes?';
       await sendWhatsappText(inbound.fromPhone, fail);
-      return { replySent: fail, action: 'calc_failed', sessionAfter: session };
+      const persisted = await sessionStore.upsert(recordOutbound(calculatingSession, fail, 'calc_failed'));
+      return { replySent: fail, action: 'calc_failed', sessionAfter: persisted };
     }
-    const updated = await sessionStore.upsert({
-      ...session,
+    calculatingSession = {
+      ...calculatingSession,
       completed: true,
       stepId: 'complete',
+      pipelineStage: calculatingSession.pipelineStage === 'vendas' || calculatingSession.pipelineStage === 'perdido'
+        ? calculatingSession.pipelineStage
+        : 'em_negociacao',
       lastGuid: calc.guid,
       lastCalculateAt: Date.now(),
       recentMessages: [],
       pendingProposal: null,
-    });
+    };
+    const updated = await sessionStore.upsert(recordOutbound(calculatingSession, calc.topReply, 'calculate', calc.guid));
     await sendWhatsappText(inbound.fromPhone, calc.topReply);
     return { replySent: calc.topReply, action: 'calculate', sessionAfter: updated };
   }
@@ -271,6 +323,7 @@ export async function processWhatsappTurn(
 
   let nextSession: SessionState = {
     ...session,
+    pipelineStage: session.pipelineStage === 'novos_leads' ? 'contatados' : session.pipelineStage,
     recentMessages: [...session.recentMessages, safeForBuffer].slice(-5),
   };
 
@@ -300,7 +353,7 @@ export async function processWhatsappTurn(
     }
   }
 
-  const persisted = await sessionStore.upsert(nextSession);
+  const persisted = await sessionStore.upsert(recordTurn(nextSession, inbound, replyToSend, result.action));
   await sendWhatsappText(inbound.fromPhone, replyToSend);
 
   return { replySent: replyToSend, action: result.action, sessionAfter: persisted };

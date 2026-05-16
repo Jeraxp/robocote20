@@ -13,6 +13,7 @@ const app = new Hono();
 
 app.get('/', (c) => c.redirect('/public/index.html'));
 app.get('/webchat', (c) => c.redirect('/public/quote-room/index.html?mode=webchat'));
+app.get('/painel', (c) => c.redirect('/public/quote-room/index.html?mode=painel'));
 app.get('/quote-room', (c) => c.redirect('/public/quote-room/index.html'));
 app.get('/quote-room/:guid', (c) =>
   c.redirect(`/public/quote-room/index.html?guid=${encodeURIComponent(c.req.param('guid'))}`),
@@ -63,12 +64,15 @@ serve({ fetch: app.fetch, port }, (info) => {
   console.log(`   http://localhost:${info.port}/health`);
   console.log(`   http://localhost:${info.port}/public/index.html`);
   console.log(`   http://localhost:${info.port}/webchat`);
+  console.log(`   http://localhost:${info.port}/painel`);
   console.log(`   http://localhost:${info.port}/quote-room`);
   console.log('');
   console.log('Endpoints de teste:');
   console.log('   GET  /api/jornadas/auto/f1       (contrato determinístico do Webchat F1)');
   console.log('   POST /api/assistente/auto/f1/mensagem (IA Taskdun -> proposta de estado da jornada)');
   console.log('   POST /api/assistente/rag/search   (busca semântica em base RAG, quando configurada)');
+  console.log('   GET  /api/painel/leads          (leads, conversas e interações sanitizadas)');
+  console.log('   POST /api/painel/leads/manual   (cadastro manual de lead para o Kanban)');
   console.log('   POST /api/jornadas/auto/f1/cotacao (Webchat F1 -> socket -> calculate -> Quote Room)');
   console.log('   GET  /api/cotacoes/:guid/resumo  (DTO seguro para Quote Room)');
   console.log('   GET  /test/auth                    (gera Bearer / força refresh com ?refresh=1)');

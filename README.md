@@ -31,6 +31,7 @@ Acessos locais:
 - Bancada técnica: `http://localhost:3030/public/index.html`
 - Webchat F1: `http://localhost:3030/webchat`
 - Quote Room: `http://localhost:3030/quote-room`
+- Painel operacional: `http://localhost:3030/painel`
 
 Para trabalhar no front com hot reload:
 
@@ -49,6 +50,9 @@ npm run dev:web
 | `POST /api/assistente/rag/search` | Busca semântica na base RAG curada, sem aceitar CPF/CNPJ/telefone na consulta |
 | `POST /api/jornadas/auto/f1/cotacao?timeoutMs=45000` | Webchat F1 -> socket.io -> `calculate` -> `show-results` -> DTO seguro |
 | `GET /api/cotacoes/:guid/resumo` | DTO seguro para o Robocote Quote Room |
+| `GET /api/painel/leads` | Leads, etapas comerciais, conversas e dados coletados com mascaramento de PII |
+| `POST /api/painel/leads/manual` | Cadastra lead manual captado pelo corretor/indicação e coloca no Kanban |
+| `PATCH /api/painel/leads/:id/stage` | Move lead entre colunas do Kanban operacional |
 | `GET /test/auth?refresh=1` | Valida BasicAuth -> Bearer sem devolver o token |
 | `GET /test/marcas/:tipo` | `brand-list` oficial, filtrado para carro\|moto\|caminhao |
 | `GET /test/modelos?brand_id&model_year&vehicle_type=car` | `model-list` oficial com UUID de marca da NJ |
@@ -164,11 +168,21 @@ frontend/
 - Cotação Segfy (calculate + socket.io + show-results + Quote Room) **intocada**. Toda mudança vive na camada conversacional.
 - RAG curado ainda não plugado no reply — placeholder com regra pétrea no Personality Core: "nunca invente preço/cobertura/franquia". RAG é o próximo passo natural.
 
+## Estado atual (2026-05-16) — Painel operacional
+
+- `SessionStore` agora registra etapa comercial, mensagens inbound/outbound e dados estruturados por lead.
+- O orquestrador WhatsApp grava interações sanitizadas a cada turno e move leads automaticamente para `Contatados` e `Em Negociação` quando a cotação é entregue.
+- `/painel` abre um Kanban simples com 6 colunas: Novos Leads, Contatados, Em Negociação, Sem Retorno, Vendas e Perdido.
+- Clique no card abre um modal sobre a tela, no estilo Trello, com conversa, ficha do lead, dados coletados e link do Quote Room quando existir.
+- O botão "Adicionar novo lead" permite cadastro manual de indicação/prospecção com nome, WhatsApp, origem, veículo informado e observações.
+- O painel consome somente DTO sanitizado: CPF, telefone, CEP e documentos saem mascarados.
+- Persistência segue in-memory no spike; em produção, esta interface deve migrar para Postgres mantendo o contrato de `SessionStore`.
+
 ## Testes locais
 
 ```bash
 npm run typecheck
-npm run build:web
+npm run build
 ```
 
 Sem credenciais novas, validar apenas `/health`, stubs e diagnóstico dry-run.

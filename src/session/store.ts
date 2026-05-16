@@ -13,6 +13,7 @@
 import type { CoveragePreference } from '../quote/summary.js';
 
 export type SessionChannel = 'webchat' | 'whatsapp';
+export type PipelineStage = 'novos_leads' | 'contatados' | 'em_negociacao' | 'sem_retorno' | 'vendas' | 'perdido';
 
 const ACTIVE_STEPS = [
   'name',
@@ -53,6 +54,16 @@ export interface PendingProposal {
   metadata?: Record<string, unknown>;
 }
 
+export interface SessionInteraction {
+  id: string;
+  at: number;
+  direction: 'inbound' | 'outbound' | 'system';
+  text: string;
+  action?: string;
+  stepId?: SessionStepId;
+  quoteGuid?: string | null;
+}
+
 export interface SessionState {
   tenantId: string;
   channel: SessionChannel;
@@ -60,8 +71,10 @@ export interface SessionState {
 
   stepId: SessionStepId;
   completed: boolean;
+  pipelineStage: PipelineStage;
   answers: Record<string, SessionAnswer>;
   recentMessages: string[];
+  interactions: SessionInteraction[];
 
   customerFirstName: string | null;
   coveragePreference: CoveragePreference;
@@ -85,6 +98,7 @@ export interface SessionKey {
 
 export interface SessionStore {
   get(key: SessionKey): Promise<SessionState | null>;
+  list(): Promise<SessionState[]>;
   upsert(state: SessionState): Promise<SessionState>;
   delete(key: SessionKey): Promise<void>;
   size(): Promise<number>;
@@ -104,8 +118,10 @@ export function createInitialSessionState(key: SessionKey): SessionState {
     channelUserId: key.channelUserId,
     stepId: 'name',
     completed: false,
+    pipelineStage: 'novos_leads',
     answers: {},
     recentMessages: [],
+    interactions: [],
     customerFirstName: null,
     coveragePreference: null,
     pendingProposal: null,
@@ -134,9 +150,21 @@ export class InMemorySessionStore implements SessionStore {
     return entry.state;
   }
 
+  async list(): Promise<SessionState[]> {
+    this.cleanupExpired();
+    return [...this.store.values()]
+      .map((entry) => entry.state)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
   async upsert(state: SessionState): Promise<SessionState> {
     const now = Date.now();
-    const next: SessionState = { ...state, updatedAt: now };
+    const next: SessionState = {
+      ...state,
+      pipelineStage: state.pipelineStage ?? 'novos_leads',
+      interactions: state.interactions ?? [],
+      updatedAt: now,
+    };
     this.store.set(keyOf(next), { state: next, expiresAt: now + this.ttlMs });
     return next;
   }
@@ -146,13 +174,38 @@ export class InMemorySessionStore implements SessionStore {
   }
 
   async size(): Promise<number> {
-    // Limpa expirados oportunisticamente antes de reportar
+    this.cleanupExpired();
+    return this.store.size;
+  }
+
+  private cleanupExpired(): void {
     const now = Date.now();
     for (const [k, entry] of this.store.entries()) {
       if (entry.expiresAt < now) this.store.delete(k);
     }
-    return this.store.size;
   }
+}
+
+export function appendSessionInteraction(
+  state: SessionState,
+  interaction: Omit<SessionInteraction, 'id' | 'at'> & { id?: string; at?: number },
+): SessionState {
+  const at = interaction.at ?? Date.now();
+  const id = interaction.id ?? `${at}-${Math.random().toString(16).slice(2)}`;
+  const next: SessionInteraction = {
+    id,
+    at,
+    direction: interaction.direction,
+    text: interaction.text,
+    action: interaction.action,
+    stepId: interaction.stepId,
+    quoteGuid: interaction.quoteGuid,
+  };
+
+  return {
+    ...state,
+    interactions: [...(state.interactions ?? []), next].slice(-200),
+  };
 }
 
 // Instância singleton compartilhada. Pode ser substituída por PostgresSessionStore

@@ -19,6 +19,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type { CoveragePreference, QuoteCustomerInfo, QuoteOptionSummary, QuoteRecommendation, QuoteSummary } from './types';
 import { DeterministicChat } from './DeterministicChat';
+import { Panel } from './Panel';
 import robocoteLogo from './assets/logo_robocote.png';
 
 const DEMO_GUID = 'a6c2c899-0fb3-4cc4-81a3-ed8cc6742ea7';
@@ -98,8 +99,10 @@ function getInitialGuid(): string {
   return DEMO_GUID;
 }
 
-function getInitialMode(): 'quote-room' | 'webchat' {
+function getInitialMode(): 'quote-room' | 'webchat' | 'painel' {
   const params = new URLSearchParams(window.location.search);
+  if (params.get('mode') === 'painel') return 'painel';
+  if (window.location.pathname.includes('/painel')) return 'painel';
   if (params.get('mode') === 'webchat') return 'webchat';
   if (window.location.pathname.includes('/webchat')) return 'webchat';
   if (params.get('mode') === 'quote-room') return 'quote-room';
@@ -666,6 +669,15 @@ export function App(): JSX.Element {
       <>
         <AppHeader status="Jornada determinística F1" />
         <DeterministicChat />
+      </>
+    );
+  }
+
+  if (mode === 'painel') {
+    return (
+      <>
+        <AppHeader status="Operação Robocote" />
+        <Panel />
       </>
     );
   }

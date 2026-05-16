@@ -894,10 +894,11 @@ async function taskdunAi(request: AssistantRequest): Promise<AssistantResponse |
   let reply: string;
 
   try {
+    // GPT-5.3 / GPT-5.4 (família nova) rejeitam `temperature` custom — só aceitam o default.
+    // Por isso aqui NÃO passamos temperature. O tom já é segurado pelo Personality Core.
     const replyContent = await chatCompletion({
       model: replyModel,
       json: true,
-      temperature: router.mode === 'consult' ? 0.6 : 0.4,
       messages: [
         { role: 'system', content: await replySystemPrompt(request.channel, router.mode) },
         { role: 'user', content: replyUserPrompt(request, router, proposedAnswer) },

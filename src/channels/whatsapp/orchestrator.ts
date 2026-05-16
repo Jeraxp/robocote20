@@ -37,12 +37,45 @@ const GREETING_LINES = [
   'Pra começar, qual é seu nome completo?',
 ];
 
+function isLikelyCpfDigits(digits: string): boolean {
+  if (digits.length !== 11 || /^(\d)\1{10}$/.test(digits)) return false;
+  const calc = (factor: number): number => {
+    const total = digits
+      .slice(0, factor - 1)
+      .split('')
+      .reduce((sum, d, i) => sum + Number(d) * (factor - i), 0);
+    const mod = (total * 10) % 11;
+    return mod === 10 ? 0 : mod;
+  };
+  return calc(10) === Number(digits[9]) && calc(11) === Number(digits[10]);
+}
+
 function maskCpfPii(value: string): string {
   return value
-    .replace(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, '<CPF protegido>')
+    // CNPJ pontuado primeiro (formato único, sem ambiguidade)
     .replace(/\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b/g, '<CNPJ protegido>')
-    .replace(/\b\d{5}-?\d{3}\b/g, '<CEP protegido>')
-    .replace(/\b(?:\+?55\s*)?\(?\d{2}\)?\s?9?\d{4}-?\d{4}\b/g, '<telefone protegido>');
+    // CPF: formato pontuado SEMPRE mascara; cru 11 dígitos só se passar em DV
+    // (telefone 48988326647 não passa, então fica intacto pra próxima regra)
+    .replace(/\b(\d{3})\.?(\d{3})\.?(\d{3})-?(\d{2})\b/g, (match, a, b, c, d) => {
+      if (/[.\-]/.test(match)) return '<CPF protegido>';
+      const digits = `${a}${b}${c}${d}`;
+      return isLikelyCpfDigits(digits) ? '<CPF protegido>' : match;
+    })
+    // Telefone (BR celular) — cobre o caso 11 dígitos crus que NÃO eram CPF
+    .replace(/\b(?:\+?55\s*)?\(?\d{2}\)?\s?9?\d{4}-?\d{4}\b/g, '<telefone protegido>')
+    // CEP: pontuado ou cru, MAS não mascarar se parecer data de nascimento DDMMAAAA
+    .replace(/\b(\d{5})-(\d{3})\b/g, '<CEP protegido>')
+    .replace(/\b(\d{2})(\d{2})(\d{4})\b/g, (match, dd, mm, yyyy) => {
+      const dDay = Number(dd);
+      const mMonth = Number(mm);
+      const yYear = Number(yyyy);
+      // DDMMAAAA plausível pra data de nascimento → não mascara
+      if (dDay >= 1 && dDay <= 31 && mMonth >= 1 && mMonth <= 12 && (yYear >= 1900 && yYear <= 2030)) {
+        return match;
+      }
+      // Caso contrário, 8 dígitos = CEP cru
+      return '<CEP protegido>';
+    });
 }
 
 function normalizeMsg(value: string): string {

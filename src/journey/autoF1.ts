@@ -88,6 +88,10 @@ function normalizeDate(value: string): string {
   const brMatch = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(trimmed);
   if (brMatch) return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`;
 
+  // DDMMAAAA cru (lead WhatsApp digita data sem barras)
+  const cruMatch = /^(\d{2})(\d{2})(\d{4})$/.exec(trimmed);
+  if (cruMatch) return `${cruMatch[3]}-${cruMatch[2]}-${cruMatch[1]}`;
+
   return trimmed;
 }
 

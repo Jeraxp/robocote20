@@ -243,7 +243,19 @@ function extractBirthDate(value: string): string | null {
   const br = value.match(/\b\d{2}\/\d{2}\/\d{4}\b/);
   if (br) return br[0];
   const iso = value.match(/\b\d{4}-\d{2}-\d{2}\b/);
-  return iso?.[0] ?? null;
+  if (iso) return iso[0];
+  // Aceita DDMMAAAA cru (ex: "04031976" → "04/03/1976") — comum no WhatsApp.
+  const cru = value.match(/\b(\d{2})(\d{2})(\d{4})\b/);
+  if (cru) {
+    const dd = Number(cru[1]);
+    const mm = Number(cru[2]);
+    const yyyy = Number(cru[3]);
+    const thisYear = new Date().getFullYear();
+    if (dd >= 1 && dd <= 31 && mm >= 1 && mm <= 12 && yyyy >= 1900 && yyyy <= thisYear - 14) {
+      return `${cru[1]}/${cru[2]}/${cru[3]}`;
+    }
+  }
+  return null;
 }
 
 function choiceFor(stepId: ActiveStepId, message: string): Choice | null {
@@ -852,6 +864,12 @@ function proposedAnswerFromRouter(
     const year = extractYear(request.message);
     if (!year || router.value !== year) return undefined;
     return { stepId, value: year, displayLabel: year, confidence: router.confidence };
+  }
+
+  if (stepId === 'driver_birth_date') {
+    const date = extractBirthDate(request.message);
+    if (!date) return undefined;
+    return { stepId, value: date, displayLabel: date, confidence: router.confidence };
   }
 
   if (stepId === 'zip_code') {

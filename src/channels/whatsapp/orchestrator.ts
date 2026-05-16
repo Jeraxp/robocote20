@@ -274,6 +274,8 @@ export async function processWhatsappTurn(
     recentMessages: [...session.recentMessages, safeForBuffer].slice(-5),
   };
 
+  let replyToSend = result.reply;
+
   if (result.action === 'answer_step' && result.proposedAnswer) {
     const proposal = {
       stepId: result.proposedAnswer.stepId,
@@ -288,13 +290,20 @@ export async function processWhatsappTurn(
     } else {
       // Avança normal: aplica answer no estado e move pro próximo step.
       nextSession = applyProposalAndAdvance(nextSession, proposal);
+      // P8 — Concatena a pergunta do próximo step pra Vivi não deixar
+      // o lead no escuro depois do "Anotei". No WhatsApp não tem rail visual
+      // mostrando o que vem em seguida — quem conduz é a fala dela.
+      const nextStep = nextSession.stepId;
+      if (nextStep !== 'complete' && STEP_PROMPT[nextStep as StepId]) {
+        replyToSend = `${result.reply}\n\n${STEP_PROMPT[nextStep as StepId]}`;
+      }
     }
   }
 
   const persisted = await sessionStore.upsert(nextSession);
-  await sendWhatsappText(inbound.fromPhone, result.reply);
+  await sendWhatsappText(inbound.fromPhone, replyToSend);
 
-  return { replySent: result.reply, action: result.action, sessionAfter: persisted };
+  return { replySent: replyToSend, action: result.action, sessionAfter: persisted };
 }
 
 const STEP_ORDER = [

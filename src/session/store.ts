@@ -42,6 +42,17 @@ export interface SessionAnswer {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Proposta pendente — Vivi sugeriu um valor (geralmente usando pista anterior)
+ * e está esperando "sim"/"não" do lead pra cravar e avançar o step.
+ */
+export interface PendingProposal {
+  stepId: string;
+  value: string;
+  displayLabel?: string;
+  metadata?: Record<string, unknown>;
+}
+
 export interface SessionState {
   tenantId: string;
   channel: SessionChannel;
@@ -55,7 +66,12 @@ export interface SessionState {
   customerFirstName: string | null;
   coveragePreference: CoveragePreference;
 
+  /** Proposta aguardando confirmação explícita do lead (sim/não). */
+  pendingProposal: PendingProposal | null;
+
   lastGuid: string | null;
+  /** Timestamp do último calculate disparado — usado pra idempotência (lock 60s). */
+  lastCalculateAt: number | null;
 
   createdAt: number;
   updatedAt: number;
@@ -92,7 +108,9 @@ export function createInitialSessionState(key: SessionKey): SessionState {
     recentMessages: [],
     customerFirstName: null,
     coveragePreference: null,
+    pendingProposal: null,
     lastGuid: null,
+    lastCalculateAt: null,
     createdAt: now,
     updatedAt: now,
   };

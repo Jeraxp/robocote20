@@ -42,9 +42,38 @@ function maskCpfPii(value: string): string {
     .replace(/\b\d{5}-?\d{3}\b/g, '<CEP protegido>');
 }
 
+function normalizeMsg(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/[^\w\s]/g, ' ')
+    .trim();
+}
+
 function isCalcConfirmation(message: string): boolean {
   return /\b(sim|pode|calcula|calcular|manda|bora|gerar|ok|vamos|vai)\b/i.test(message);
 }
+
+/** Lead confirmou uma proposta pendente ("sim", "confere", "isso" etc). */
+function looksLikeConfirmation(message: string): boolean {
+  const m = normalizeMsg(message);
+  if (!m) return false;
+  if (/^(sim|s|isso|exato|exatamente|certo|correto|confere|positivo|ok|beleza|certinho|claro|perfeito|esse|esse mesmo|esse mesmo sim|e isso|e isso mesmo|e esse|tudo certo|pode ser|pode|fechou|fechado)$/.test(m)) return true;
+  if (/^(é|eh)\s*(isso|esse|sim)?$/.test(m)) return true;
+  return false;
+}
+
+/** Lead negou uma proposta pendente. */
+function looksLikeDenial(message: string): boolean {
+  const m = normalizeMsg(message);
+  if (!m) return false;
+  if (/^(nao|n|errado|errou|negativo|nem|nada disso|nao e|nao e isso|nao e esse|outro|outra)$/.test(m)) return true;
+  return false;
+}
+
+const CALCULATE_IDEMPOTENCY_MS = 60_000;
+const PROGRESS_NUDGE_MS = 15_000;
 
 function buildQuoteLink(guid: string): string {
   if (!ROBOCOTE_QUOTE_BASE_URL) return `/quote-room/${guid}`;
@@ -147,10 +176,64 @@ export async function processWhatsappTurn(
     return { replySent: reply, action: 'none', sessionAfter: session };
   }
 
+  // ─── P1 — Proposta pendente aguardando confirmação ──────────────────────────────
+  // Quando a Vivi propôs algo usando pista anterior e marcou pendingConfirmation,
+  // a próxima mensagem do lead pode ser "sim/não". Interceptamos antes do handler
+  // pra evitar que "sim" vire resposta do próximo step.
+  if (session.pendingProposal) {
+    const pending = session.pendingProposal;
+
+    if (looksLikeConfirmation(inbound.text)) {
+      const advanced = applyProposalAndAdvance(session, pending);
+      const persisted = await sessionStore.upsert(advanced);
+      const next = persisted.stepId;
+      const ack = `Anotei: ${pending.displayLabel ?? pending.value}.`;
+      const followUp = next !== 'complete' && STEP_PROMPT[next as StepId]
+        ? `\n\n${STEP_PROMPT[next as StepId]}`
+        : '';
+      const reply = `${ack}${followUp}`;
+      await sendWhatsappText(inbound.fromPhone, reply);
+      return { replySent: reply, action: 'answer_step', sessionAfter: persisted };
+    }
+
+    if (looksLikeDenial(inbound.text)) {
+      const cleared = await sessionStore.upsert({ ...session, pendingProposal: null });
+      const currentStep = session.stepId === 'complete' ? 'quote_link' : session.stepId;
+      const prompt = STEP_PROMPT[currentStep as StepId] ?? 'Me passa o dado de novo, por favor.';
+      const reply = `Beleza, vou refazer. ${prompt}`;
+      await sendWhatsappText(inbound.fromPhone, reply);
+      return { replySent: reply, action: 'ask_clarification', sessionAfter: cleared };
+    }
+
+    // Mensagem ambígua: limpa proposta pendente e segue fluxo normal — o handler
+    // decide o que fazer com a nova mensagem (pode até gerar nova proposta).
+    session = await sessionStore.upsert({ ...session, pendingProposal: null });
+  }
+
   // Step quote_link com confirmação direta → dispara cotação sem passar pelo modelo.
   if (session.stepId === 'quote_link' && isCalcConfirmation(inbound.text)) {
+    // ─── P2 — Idempotência: se já calculou nos últimos 60s, reenvia o link existente ──
+    if (session.lastGuid && session.lastCalculateAt && Date.now() - session.lastCalculateAt < CALCULATE_IDEMPOTENCY_MS) {
+      const link = buildQuoteLink(session.lastGuid);
+      const reply = `Sua cotação ainda tá fresca aqui — pode abrir:\n${link}`;
+      await sendWhatsappText(inbound.fromPhone, reply);
+      return { replySent: reply, action: 'none', sessionAfter: session };
+    }
+
     await sendWhatsappText(inbound.fromPhone, 'Fechado, vou calcular agora — isso leva uns segundos.');
-    const calc = await triggerCalculate(inbound, session);
+
+    // ─── P5 — Nudge de progresso se Segfy demorar > 15s ──────────────────────────────
+    const progressTimer = setTimeout(() => {
+      sendWhatsappText(inbound.fromPhone, 'Tô esperando as seguradoras responderem, mais alguns segundinhos…').catch(() => undefined);
+    }, PROGRESS_NUDGE_MS);
+
+    let calc: Awaited<ReturnType<typeof triggerCalculate>>;
+    try {
+      calc = await triggerCalculate(inbound, session);
+    } finally {
+      clearTimeout(progressTimer);
+    }
+
     if (!calc) {
       const fail = 'Não consegui concluir a cotação agora. Posso tentar novamente em alguns instantes?';
       await sendWhatsappText(inbound.fromPhone, fail);
@@ -161,7 +244,9 @@ export async function processWhatsappTurn(
       completed: true,
       stepId: 'complete',
       lastGuid: calc.guid,
+      lastCalculateAt: Date.now(),
       recentMessages: [],
+      pendingProposal: null,
     });
     await sendWhatsappText(inbound.fromPhone, calc.topReply);
     return { replySent: calc.topReply, action: 'calculate', sessionAfter: updated };
@@ -190,28 +275,20 @@ export async function processWhatsappTurn(
   };
 
   if (result.action === 'answer_step' && result.proposedAnswer) {
-    const stepId = result.proposedAnswer.stepId;
-    nextSession = {
-      ...nextSession,
-      answers: {
-        ...nextSession.answers,
-        [stepId]: {
-          id: stepId,
-          label: stepId,
-          value: result.proposedAnswer.displayLabel ?? result.proposedAnswer.value,
-          rawValue: result.proposedAnswer.value,
-          metadata: result.proposedAnswer.metadata,
-        },
-      },
-      stepId: nextStepAfter(stepId),
-      recentMessages: [],
-      customerFirstName: stepId === 'name'
-        ? extractFirstName(result.proposedAnswer.value)
-        : nextSession.customerFirstName,
-      coveragePreference: stepId === 'coverage'
-        ? normalizeCoverage(result.proposedAnswer.value)
-        : nextSession.coveragePreference,
+    const proposal = {
+      stepId: result.proposedAnswer.stepId,
+      value: result.proposedAnswer.value,
+      displayLabel: result.proposedAnswer.displayLabel,
+      metadata: result.proposedAnswer.metadata,
     };
+    if (result.pendingConfirmation) {
+      // P1 — Router usou pista anterior. Guarda como pending e NÃO avança step.
+      // Próxima mensagem ("sim"/"não") é interceptada acima e decide.
+      nextSession = { ...nextSession, pendingProposal: proposal };
+    } else {
+      // Avança normal: aplica answer no estado e move pro próximo step.
+      nextSession = applyProposalAndAdvance(nextSession, proposal);
+    }
   }
 
   const persisted = await sessionStore.upsert(nextSession);
@@ -239,11 +316,33 @@ const STEP_ORDER = [
   'quote_link',
 ] as const;
 
-function nextStepAfter(stepId: (typeof STEP_ORDER)[number]): SessionState['stepId'] {
+type StepId = (typeof STEP_ORDER)[number];
+
+function nextStepAfter(stepId: StepId): SessionState['stepId'] {
   const idx = STEP_ORDER.indexOf(stepId);
   if (idx === -1 || idx >= STEP_ORDER.length - 1) return 'complete';
   return STEP_ORDER[idx + 1] ?? 'complete';
 }
+
+/** Pergunta padrão da Vivi pra cada step — usado quando avançamos via confirmação direta. */
+const STEP_PROMPT: Record<StepId, string> = {
+  name: 'Pra começar, qual é seu nome completo?',
+  vehicle_brand: 'Qual é a marca do veículo?',
+  vehicle_year: 'Qual o ano do veículo?',
+  vehicle_model: 'Qual modelo do veículo?',
+  usage: 'O uso é pessoal, trabalho ou empresa/frota?',
+  renewal_status: 'É seguro novo ou renovação?',
+  zip_code: 'Qual o CEP de residência? Pode mandar só os números.',
+  residence_type: 'Mora em casa ou apartamento?',
+  residence_garage: 'Tem garagem? Se sim, com ou sem portão eletrônico?',
+  marital_status: 'Qual seu estado civil? Solteiro, casado, divorciado ou viúvo.',
+  coverage: 'Na decisão, prioriza economia, equilíbrio ou proteção?',
+  contact: 'Qual WhatsApp o corretor pode usar pra continuar? (pode pular se quiser)',
+  driver_birth_date: 'Data de nascimento do condutor? (DD/MM/AAAA)',
+  driver_sex: 'Sexo do condutor — masculino ou feminino?',
+  document: 'Última coisa antes do cálculo: me passa o CPF. As seguradoras consultam Serasa pra precificar — fica protegido com criptografia.',
+  quote_link: 'Pronto. Posso calcular agora?',
+};
 
 function extractFirstName(value: string): string | null {
   const trimmed = value.trim();
@@ -257,4 +356,43 @@ function normalizeCoverage(value: string): SessionState['coveragePreference'] {
   if (v.includes('equilib') || v.includes('equilíb')) return 'Equilíbrio';
   if (v.includes('prote')) return 'Proteção';
   return null;
+}
+
+/**
+ * Aplica uma proposta como answer no estado da sessão e avança pro próximo step.
+ * Usado tanto quando o lead confirma uma pendingProposal quanto quando o router
+ * decide answer_step direto (sem confirmação pendente).
+ */
+function applyProposalAndAdvance(
+  session: SessionState,
+  proposal: {
+    stepId: string;
+    value: string;
+    displayLabel?: string;
+    metadata?: Record<string, unknown>;
+  },
+): SessionState {
+  const stepId = proposal.stepId as StepId;
+  return {
+    ...session,
+    answers: {
+      ...session.answers,
+      [stepId]: {
+        id: stepId,
+        label: stepId,
+        value: proposal.displayLabel ?? proposal.value,
+        rawValue: proposal.value,
+        metadata: proposal.metadata,
+      },
+    },
+    stepId: nextStepAfter(stepId),
+    recentMessages: [],
+    pendingProposal: null,
+    customerFirstName: stepId === 'name'
+      ? (extractFirstName(proposal.value) ?? session.customerFirstName)
+      : session.customerFirstName,
+    coveragePreference: stepId === 'coverage'
+      ? normalizeCoverage(proposal.value)
+      : session.coveragePreference,
+  };
 }

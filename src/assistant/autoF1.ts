@@ -100,6 +100,12 @@ export interface AssistantResponse {
   channel: Channel;
   reply: string;
   proposedAnswer?: AssistantStepAnswer;
+  /**
+   * Quando true, a `proposedAnswer` veio de pista anterior (não da mensagem atual).
+   * O orquestrador NÃO avança o step automaticamente — guarda como proposta pendente
+   * e espera "sim/não" explícito do lead. Evita "sim" do lead virar resposta do próximo step.
+   */
+  pendingConfirmation?: boolean;
 }
 
 type Choice = { label: string; value: string; terms: string[] };
@@ -717,19 +723,54 @@ async function replySystemPrompt(channel: Channel, mode: AssistantMode): Promise
   ].join('\n');
 }
 
+/**
+ * Decide se o `value` proposto veio MESMO da pista anterior (não da mensagem atual).
+ *
+ * Compara fonéticamente a mensagem atual com `displayLabel`/`value` proposto:
+ *   - Se houver overlap claro (containment, igualdade, prefixo), considera que veio da mensagem.
+ *   - Se NÃO houver overlap, a info veio de turno anterior — `usedRecentHint = true`.
+ *
+ * Isso evita a Vivi dizer "pelo que você me passou antes" quando o lead acabou
+ * de dizer "Jeep" no step de marca.
+ */
+function messageMatchesProposed(message: string, proposed: AssistantStepAnswer): boolean {
+  const m = normalize(message);
+  if (!m) return false;
+  const candidates = [proposed.displayLabel, proposed.value].filter((v): v is string => Boolean(v));
+  for (const c of candidates) {
+    const n = normalize(c);
+    if (!n) continue;
+    if (m === n) return true;
+    if (m.includes(n) || n.includes(m)) return true;
+    // Primeira palavra do proposto bate com algo na mensagem?
+    const firstWord = n.split(/\s+/)[0];
+    if (firstWord && firstWord.length >= 3 && m.includes(firstWord)) return true;
+    // Última palavra do proposto bate? (ex: "compass limited" do lead vs "COMPASS LIMITED TD 350" proposto)
+    const words = n.split(/\s+/).filter((w) => w.length >= 3);
+    const overlap = words.filter((w) => m.includes(w)).length;
+    if (overlap >= 2) return true;
+  }
+  return false;
+}
+
+function computeUsedRecentHint(
+  request: AssistantRequest,
+  proposedAnswer?: AssistantStepAnswer,
+): boolean {
+  if (!proposedAnswer) return false;
+  if (request.snapshot.recentMessages.length === 0) return false;
+  // Se a mensagem atual já contém ou casa com o proposto, NÃO é hint.
+  if (messageMatchesProposed(request.message, proposedAnswer)) return false;
+  return true;
+}
+
 function replyUserPrompt(
   request: AssistantRequest,
   router: RouterResponse,
   proposedAnswer?: AssistantStepAnswer,
+  usedHint = false,
 ): string {
   const currentStep = STEP_CONTEXT[request.snapshot.stepId];
-  // Heurística: se o router resolveu o step usando pista anterior (mensagem atual curta ou
-  // genérica + recentMessages não vazias), avisa a Vivi pra CONFIRMAR a proposta antes de seguir.
-  const usedHint = Boolean(
-    proposedAnswer &&
-    request.snapshot.recentMessages.length > 0 &&
-    request.message.trim().length < 30,
-  );
   return JSON.stringify({
     channel: request.channel,
     currentStep: request.snapshot.stepId,
@@ -890,6 +931,8 @@ async function taskdunAi(request: AssistantRequest): Promise<AssistantResponse |
     router.action = 'ask_clarification';
   }
 
+  const usedHint = router.action === 'answer_step' && computeUsedRecentHint(request, proposedAnswer);
+
   const replyModel = needsAnalystModel(request, router) ? ROBOCOTE_ANALYST_MODEL : ROBOCOTE_DIALOG_MODEL;
   let reply: string;
 
@@ -901,7 +944,7 @@ async function taskdunAi(request: AssistantRequest): Promise<AssistantResponse |
       json: true,
       messages: [
         { role: 'system', content: await replySystemPrompt(request.channel, router.mode) },
-        { role: 'user', content: replyUserPrompt(request, router, proposedAnswer) },
+        { role: 'user', content: replyUserPrompt(request, router, proposedAnswer, usedHint) },
       ],
     });
     reply = replyResponseSchema.parse(parseJsonContent(replyContent)).reply;
@@ -922,6 +965,7 @@ async function taskdunAi(request: AssistantRequest): Promise<AssistantResponse |
     channel: request.channel,
     reply: truncateReply(reply, request.channel),
     proposedAnswer,
+    pendingConfirmation: Boolean(usedHint),
   };
 }
 

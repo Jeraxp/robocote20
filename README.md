@@ -1,5 +1,7 @@
 # Robocote 2.0 — Spike Oficial Segfy Nova Jornada
 
+[![Build & Push GHCR](https://github.com/Jeraxp/robocote20/actions/workflows/build.yml/badge.svg)](https://github.com/Jeraxp/robocote20/actions/workflows/build.yml)
+
 Spike determinístico de exploração da **Segfy Nova Jornada** (`api.automation.segfy.com`), que passa a ser o contrato canônico do Robocote 2.0.
 
 O Robocote antigo usava integrações legadas (`multicalculo.segfy.com` e V2). Esse material serve só como referência de negócio/UX. A casa nova será construída do zero sobre Swagger oficial, credenciais novas e socket.io oficial.

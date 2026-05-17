@@ -19,6 +19,7 @@ import { handleAutoF1AssistantMessage, type AssistantAction } from '../../assist
 import { runAutoF1Quote, type AutoF1QuoteRequest } from '../../journey/autoF1.js';
 import { loadCatalogForStep } from '../../catalog/auto.js';
 import { decodePlate, pickPlateDecodeOutcome, isValidPlateFormat, normalizePlate } from '../../segfy/placa.js';
+import { buscarCondutor } from '../../segfy/condutor.js';
 import {
   sessionStore,
   createInitialSessionState,
@@ -129,6 +130,28 @@ function extractPlateFromMessage(message: string): string | null {
   return null;
 }
 
+/** Extrai CPF válido (com DV correto) de qualquer mensagem. */
+function extractValidCpf(text: string): string | null {
+  const match = text.match(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/);
+  if (!match) return null;
+  const digits = match[0].replace(/\D/g, '');
+  if (digits.length !== 11 || /^(\d)\1{10}$/.test(digits)) return null;
+  const calc = (factor: number): number => {
+    const total = digits
+      .slice(0, factor - 1)
+      .split('')
+      .reduce((sum, d, i) => sum + Number(d) * (factor - i), 0);
+    const mod = (total * 10) % 11;
+    return mod === 10 ? 0 : mod;
+  };
+  return calc(10) === Number(digits[9]) && calc(11) === Number(digits[10]) ? digits : null;
+}
+
+function maskCpf(digits: string): string {
+  if (digits.length !== 11) return '<CPF protegido>';
+  return `${digits.slice(0, 3)}.***.***-${digits.slice(9)}`;
+}
+
 function buildQuoteLink(guid: string): string {
   if (!ROBOCOTE_QUOTE_BASE_URL) return `/quote-room/${guid}`;
   return `${ROBOCOTE_QUOTE_BASE_URL.replace(/\/$/, '')}/quote-room/${guid}`;
@@ -208,6 +231,18 @@ function answersFromSession(session: SessionState): AutoF1QuoteRequest['answers'
     driver_birth_date: getRaw('driver_birth_date'),
     driver_sex: getRaw('driver_sex'),
     document: getRaw('document'),
+    // Questionário de risco — respostas reais do segurado
+    is_main_driver: getRaw('is_main_driver') || 'yes',
+    main_driver_document: getRaw('main_driver_document'),
+    main_driver_name: getRaw('main_driver_name'),
+    main_driver_birth_date: getRaw('main_driver_birth_date'),
+    main_driver_sex: getRaw('main_driver_sex'),
+    young_driver: getRaw('young_driver') || 'no',
+    studies: getRaw('studies') || 'no',
+    study_garage: getRaw('study_garage') || 'no',
+    work_commute: getRaw('work_commute') || 'no',
+    work_garage: getRaw('work_garage') || 'no',
+    monthly_km: getRaw('monthly_km') || '1000',
   };
 }
 
@@ -478,6 +513,76 @@ export async function processWhatsappTurn(
     // Sem placa identificada e sem pendência — handler IA pede esclarecimento.
   }
 
+  // ─── Steps de CPF (document + main_driver_document): lookup automático ──────
+  // Quando lead manda CPF válido, busca /insured no Segfy pra puxar nome+birth+sex
+  // direto do cadastro — elimina perguntas redundantes (Jera 2026-05-17).
+  if (session.stepId === 'document' || session.stepId === 'main_driver_document') {
+    const cpf = extractValidCpf(inbound.text);
+    if (cpf) {
+      const promotedStage = session.pipelineStage === 'novos_leads' ? 'contatados' : session.pipelineStage;
+      const lookup = await buscarCondutor(cpf);
+      const insured = lookup.ok && lookup.data ? lookup.data : null;
+      const cpfMasked = maskCpf(cpf);
+
+      const baseAnswers: Record<string, { id: string; label: string; value: string; rawValue?: string; metadata?: Record<string, unknown> }> = { ...session.answers };
+
+      if (session.stepId === 'document') {
+        baseAnswers.document = { id: 'document', label: 'CPF', value: cpfMasked, rawValue: cpf };
+        if (insured) {
+          baseAnswers.driver_birth_date = {
+            id: 'driver_birth_date',
+            label: 'Nascimento',
+            value: insured.birth_date,
+            rawValue: insured.birth_date,
+          };
+          baseAnswers.driver_sex = {
+            id: 'driver_sex',
+            label: 'Sexo',
+            value: insured.gender === 'male' ? 'Masculino' : 'Feminino',
+            rawValue: insured.gender,
+          };
+        }
+      } else {
+        // main_driver_document
+        baseAnswers.main_driver_document = { id: 'main_driver_document', label: 'CPF condutor', value: cpfMasked, rawValue: cpf };
+        if (insured) {
+          baseAnswers.main_driver_name = { id: 'main_driver_name', label: 'Nome condutor', value: insured.name, rawValue: insured.name };
+          baseAnswers.main_driver_birth_date = { id: 'main_driver_birth_date', label: 'Nascimento condutor', value: insured.birth_date, rawValue: insured.birth_date };
+          baseAnswers.main_driver_sex = { id: 'main_driver_sex', label: 'Sexo condutor', value: insured.gender === 'male' ? 'Masculino' : 'Feminino', rawValue: insured.gender };
+        }
+      }
+
+      const nextStep = nextStepAfter(session.stepId as StepId, baseAnswers);
+      const next: SessionState = {
+        ...session,
+        answers: baseAnswers,
+        stepId: nextStep,
+        recentMessages: [],
+        pendingProposal: null,
+        pipelineStage: promotedStage,
+      };
+
+      let ack: string;
+      if (session.stepId === 'document') {
+        ack = insured
+          ? `CPF anotado ✅ — puxei seus dados do cadastro.`
+          : `CPF anotado ✅`;
+      } else {
+        ack = insured
+          ? `Beleza, condutor principal anotado: ${insured.name.split(/\s+/)[0]}.`
+          : `CPF do condutor anotado ✅`;
+      }
+      const followUp = nextStep !== 'complete' && STEP_PROMPT[nextStep as StepId]
+        ? `\n\n${STEP_PROMPT[nextStep as StepId]}`
+        : '';
+      const reply = `${ack}${followUp}`;
+      await sendWhatsappText(inbound.fromPhone, reply);
+      const persisted = await sessionStore.upsert(recordTurn(next, inbound, reply, 'cpf_lookup'));
+      return { replySent: reply, action: 'answer_step', sessionAfter: persisted };
+    }
+    // CPF inválido — deixa o handler IA (local-rules) pedir correção
+  }
+
   // Step quote_link com confirmação direta → dispara cotação sem passar pelo modelo.
   if (session.stepId === 'quote_link' && isCalcConfirmation(inbound.text)) {
     // ─── P2 — Idempotência: se já calculou nos últimos 60s, reenvia o link existente ──
@@ -597,18 +702,45 @@ const STEP_ORDER = [
   'marital_status',
   'coverage',
   'contact',
-  'driver_birth_date',
-  'driver_sex',
+  'is_main_driver',
+  'main_driver_document',
+  'young_driver',
+  'studies',
+  'study_garage',
+  'work_commute',
+  'work_garage',
+  'monthly_km',
   'document',
   'quote_link',
 ] as const;
 
 type StepId = (typeof STEP_ORDER)[number];
 
-function nextStepAfter(stepId: StepId): SessionState['stepId'] {
+/**
+ * Decide se um step deve ser PULADO com base nas respostas já dadas.
+ * Steps condicionais do questionário de risco (Jera 2026-05-17).
+ */
+function shouldSkipStep(stepId: StepId, answers: Record<string, { rawValue?: string; value?: string }>): boolean {
+  if (stepId === 'main_driver_document') {
+    return answers.is_main_driver?.rawValue === 'yes';
+  }
+  if (stepId === 'study_garage') {
+    return answers.studies?.rawValue !== 'yes';
+  }
+  if (stepId === 'work_garage') {
+    return answers.work_commute?.rawValue !== 'yes';
+  }
+  return false;
+}
+
+function nextStepAfter(stepId: StepId, answers: Record<string, { rawValue?: string; value?: string }> = {}): SessionState['stepId'] {
   const idx = STEP_ORDER.indexOf(stepId);
   if (idx === -1 || idx >= STEP_ORDER.length - 1) return 'complete';
-  return STEP_ORDER[idx + 1] ?? 'complete';
+  for (let i = idx + 1; i < STEP_ORDER.length; i += 1) {
+    const candidate = STEP_ORDER[i];
+    if (!shouldSkipStep(candidate, answers)) return candidate;
+  }
+  return 'complete';
 }
 
 /** Pergunta padrão da Robocotepra cada step — usado quando avançamos via confirmação direta. */
@@ -626,8 +758,14 @@ const STEP_PROMPT: Record<StepId, string> = {
   marital_status: 'Qual seu estado civil? Solteiro, casado, divorciado ou viúvo.',
   coverage: 'Na decisão, prioriza economia, equilíbrio ou proteção?',
   contact: 'Qual WhatsApp o corretor pode usar pra continuar? (pode pular se quiser)',
-  driver_birth_date: 'Data de nascimento do condutor? (DD/MM/AAAA)',
-  driver_sex: 'Sexo do condutor — masculino ou feminino?',
+  is_main_driver: 'Você é quem dirige o carro na maior parte do tempo, ou é outra pessoa?',
+  main_driver_document: 'Beleza. Me passa o CPF de quem dirige principalmente — uso pra buscar os dados direto no cadastro.',
+  young_driver: 'Mais alguém com menos de 26 anos mora com você e dirige esse carro? (Isso pode pesar no preço final.)',
+  studies: 'Você estuda atualmente?',
+  study_garage: 'No local onde estuda, tem garagem fechada pra deixar o carro?',
+  work_commute: 'Usa o carro pra ir e voltar do trabalho?',
+  work_garage: 'No trabalho, tem garagem fechada pra deixar o carro?',
+  monthly_km: 'Quantos quilômetros você roda por mês, mais ou menos? Pode ser estimativa.',
   document: 'Última coisa antes do cálculo: me passa o CPF. As seguradoras consultam Serasa pra precificar — fica protegido com criptografia.',
   quote_link: 'Pronto. Posso calcular agora?',
 };
@@ -661,19 +799,20 @@ function applyProposalAndAdvance(
   },
 ): SessionState {
   const stepId = proposal.stepId as StepId;
+  const updatedAnswers = {
+    ...session.answers,
+    [stepId]: {
+      id: stepId,
+      label: stepId,
+      value: proposal.displayLabel ?? proposal.value,
+      rawValue: proposal.value,
+      metadata: proposal.metadata,
+    },
+  };
   return {
     ...session,
-    answers: {
-      ...session.answers,
-      [stepId]: {
-        id: stepId,
-        label: stepId,
-        value: proposal.displayLabel ?? proposal.value,
-        rawValue: proposal.value,
-        metadata: proposal.metadata,
-      },
-    },
-    stepId: nextStepAfter(stepId),
+    answers: updatedAnswers,
+    stepId: nextStepAfter(stepId, updatedAnswers),
     recentMessages: [],
     pendingProposal: null,
     customerFirstName: stepId === 'name'

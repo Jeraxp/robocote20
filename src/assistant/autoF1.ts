@@ -21,10 +21,16 @@ const ACTIVE_STEPS = [
   'residence_type',
   'residence_garage',
   'marital_status',
+  'is_main_driver',
+  'main_driver_document',
+  'young_driver',
+  'studies',
+  'study_garage',
+  'work_commute',
+  'work_garage',
+  'monthly_km',
   'coverage',
   'contact',
-  'driver_birth_date',
-  'driver_sex',
   'document',
   'quote_link',
 ] as const;
@@ -141,9 +147,29 @@ const CHOICES: Partial<Record<ActiveStepId, Choice[]>> = {
     { label: 'Equilíbrio', value: 'Equilíbrio', terms: ['equilibrio', 'equilíbrio', 'meio termo', 'custo beneficio', 'custo-benefício'] },
     { label: 'Proteção', value: 'Proteção', terms: ['protecao', 'proteção', 'completo', 'melhor cobertura'] },
   ],
-  driver_sex: [
-    { label: 'Masculino', value: 'male', terms: ['masculino', 'homem', 'male', 'm'] },
-    { label: 'Feminino', value: 'female', terms: ['feminino', 'mulher', 'female', 'f'] },
+  is_main_driver: [
+    { label: 'Sim, sou eu', value: 'yes', terms: ['sim', 'sou eu', 'sou', 'eu mesmo', 'eu', 's', 'isso'] },
+    { label: 'Não, é outra pessoa', value: 'no', terms: ['nao', 'não', 'outra pessoa', 'outra', 'n'] },
+  ],
+  young_driver: [
+    { label: 'Sim', value: 'yes', terms: ['sim', 's', 'tem', 'tem sim'] },
+    { label: 'Não', value: 'no', terms: ['nao', 'não', 'n', 'ninguem', 'ninguém'] },
+  ],
+  studies: [
+    { label: 'Sim', value: 'yes', terms: ['sim', 's', 'estudo'] },
+    { label: 'Não', value: 'no', terms: ['nao', 'não', 'n', 'parei', 'so trabalho', 'só trabalho'] },
+  ],
+  study_garage: [
+    { label: 'Sim, com garagem fechada', value: 'yes', terms: ['sim', 'tem', 's', 'fechada'] },
+    { label: 'Não tem', value: 'no', terms: ['nao', 'não', 'sem garagem', 'rua', 'n'] },
+  ],
+  work_commute: [
+    { label: 'Sim', value: 'yes', terms: ['sim', 's', 'uso', 'todo dia'] },
+    { label: 'Não', value: 'no', terms: ['nao', 'não', 'n', 'trabalho em casa', 'home office'] },
+  ],
+  work_garage: [
+    { label: 'Sim, com garagem fechada', value: 'yes', terms: ['sim', 'tem', 's', 'fechada'] },
+    { label: 'Não tem', value: 'no', terms: ['nao', 'não', 'sem garagem', 'rua', 'n'] },
   ],
 };
 
@@ -161,9 +187,15 @@ const STEP_CONTEXT: Record<ActiveStepId, { title: string; prompt: string }> = {
   marital_status: { title: 'Estado civil', prompt: 'Qual é o estado civil?' },
   coverage: { title: 'Perfil', prompt: 'Quer priorizar economia, equilíbrio ou proteção?' },
   contact: { title: 'Contato', prompt: 'Qual WhatsApp o corretor pode usar para continuar?' },
-  driver_birth_date: { title: 'Nascimento', prompt: 'Qual é a data de nascimento do condutor?' },
-  driver_sex: { title: 'Sexo', prompt: 'Qual sexo consta no cadastro do condutor?' },
-  document: { title: 'CPF', prompt: 'Qual CPF devemos usar para disparar a cotação oficial?' },
+  is_main_driver: { title: 'Condutor principal', prompt: 'Você é quem dirige o carro na maior parte do tempo, ou é outra pessoa?' },
+  main_driver_document: { title: 'CPF condutor', prompt: 'Beleza. Me passa o CPF de quem dirige principalmente — uso pra buscar os dados direto no cadastro.' },
+  young_driver: { title: 'Menor de 26 dirigente', prompt: 'Mais alguém com menos de 26 anos mora com você e dirige esse carro? (Isso pode pesar no preço final.)' },
+  studies: { title: 'Estuda', prompt: 'Você estuda atualmente?' },
+  study_garage: { title: 'Garagem estudo', prompt: 'No local onde estuda, tem garagem fechada pra deixar o carro?' },
+  work_commute: { title: 'Trabalho diário', prompt: 'Usa o carro pra ir e voltar do trabalho?' },
+  work_garage: { title: 'Garagem trabalho', prompt: 'No trabalho, tem garagem fechada pra deixar o carro?' },
+  monthly_km: { title: 'KM mensal', prompt: 'Quantos quilômetros você roda por mês, mais ou menos? Pode ser estimativa.' },
+  document: { title: 'CPF', prompt: 'Última coisa antes do cálculo: me passa o CPF. As seguradoras consultam Serasa pra precificar — fica protegido com criptografia.' },
   quote_link: { title: 'Link', prompt: 'Pronto para calcular na Segfy e abrir a sala consultiva?' },
 };
 
@@ -520,9 +552,9 @@ function localRules(request: AssistantRequest): AssistantResponse {
     const digits = raw.replace(/\D/g, '');
     if (digits.length >= 10) return localAnswer(channel, stepId, digits, '', 0.84);
   }
-  if (stepId === 'driver_birth_date') {
-    const date = extractBirthDate(raw);
-    if (date) return localAnswer(channel, stepId, date, date, 0.9);
+  if (stepId === 'monthly_km') {
+    const digits = raw.replace(/\D/g, '');
+    if (digits.length >= 2 && digits.length <= 5) return localAnswer(channel, stepId, digits, `${digits} km/mês`, 0.9);
   }
   if (stepId === 'document') {
     const cpf = extractCpf(raw);
@@ -868,10 +900,10 @@ function proposedAnswerFromRouter(
     return { stepId, value: year, displayLabel: year, confidence: router.confidence };
   }
 
-  if (stepId === 'driver_birth_date') {
-    const date = extractBirthDate(request.message);
-    if (!date) return undefined;
-    return { stepId, value: date, displayLabel: date, confidence: router.confidence };
+  if (stepId === 'monthly_km') {
+    const digits = request.message.replace(/\D/g, '');
+    if (digits.length < 2 || digits.length > 5) return undefined;
+    return { stepId, value: digits, displayLabel: `${digits} km/mês`, confidence: router.confidence };
   }
 
   if (stepId === 'zip_code') {

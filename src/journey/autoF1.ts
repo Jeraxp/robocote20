@@ -36,6 +36,19 @@ const autoF1AnswersSchema = z.object({
   driver_birth_date: z.string().trim().min(8),
   driver_sex: z.string().trim().min(3),
   document: z.string().trim().min(11),
+
+  // Questionário de risco (Jera 2026-05-17) — respostas reais do segurado, não chute do sistema
+  is_main_driver: z.string().trim().optional().default('yes'),       // 'yes' | 'no'
+  main_driver_document: z.string().trim().optional().default(''),    // CPF do condutor (se !=  segurado)
+  main_driver_name: z.string().trim().optional().default(''),        // via lookup /insured
+  main_driver_birth_date: z.string().trim().optional().default(''),  // via lookup
+  main_driver_sex: z.string().trim().optional().default(''),         // via lookup
+  young_driver: z.string().trim().optional().default('no'),          // 'yes' | 'no'
+  studies: z.string().trim().optional().default('no'),               // 'yes' | 'no'
+  study_garage: z.string().trim().optional().default('no'),          // 'yes' | 'no' (só relevante se studies=yes)
+  work_commute: z.string().trim().optional().default('no'),          // 'yes' | 'no'
+  work_garage: z.string().trim().optional().default('no'),           // 'yes' | 'no' (só relevante se work_commute=yes)
+  monthly_km: z.string().trim().optional().default('1000'),          // estimativa numérica
 });
 
 export const autoF1QuoteRequestSchema = z.object({
@@ -141,22 +154,34 @@ function parseYear(value: string): number {
 }
 
 function usageQuestionnaire(
-  usage: string,
+  answers: AutoF1QuoteRequest['answers'],
   residenceType: 'house' | 'apartment',
   residenceGarage: string,
 ): Record<string, unknown> {
-  const lower = usage.toLowerCase();
-  const trabalho = lower.includes('trabalho');
-  const empresa = lower.includes('empresa') || lower.includes('frota');
+  // Respostas reais do segurado (Jera 2026-05-17) — não chutar.
+  const youngDriver = answers.young_driver === 'yes';
+  const studies = answers.studies === 'yes';
+  const studyHasGarage = studies && answers.study_garage === 'yes';
+  const workCommute = answers.work_commute === 'yes';
+  const workHasGarage = workCommute && answers.work_garage === 'yes';
+  const monthlyKm = Number(answers.monthly_km) > 0 ? Number(answers.monthly_km) : 1000;
 
   return {
     utilization_type: 'personal',
-    other_driver: 'does_not_exist',
-    study_garage: 'does_not_study',
-    job_garage: trabalho ? 'yes_private_garage' : 'does_not_work',
-    work_distance: trabalho ? 20 : 0,
+    other_driver: youngDriver ? 'young_driver' : 'does_not_exist',
+    study_garage: !studies
+      ? 'does_not_study'
+      : studyHasGarage
+        ? 'yes_private_garage'
+        : 'no_private_garage',
+    job_garage: !workCommute
+      ? 'does_not_work'
+      : workHasGarage
+        ? 'yes_private_garage'
+        : 'no_private_garage',
+    work_distance: workCommute ? 20 : 0,
     tax_exemption: 'not_applicable',
-    monthly_km: trabalho ? 1500 : empresa ? 1800 : 800,
+    monthly_km: monthlyKm,
     residence_type: residenceType,
     residence_garage: residenceGarage,
   };
@@ -242,15 +267,15 @@ export function buildAutoF1Payload(
         email: '',
         document,
       },
-      questionnaire: usageQuestionnaire(answers.usage, residenceType, residenceGarage),
+      questionnaire: usageQuestionnaire(answers, residenceType, residenceGarage),
       main_driver: {
-        name,
-        birth_date: birthDate,
-        profession: 'Empresario',
-        sex,
+        name: answers.is_main_driver === 'no' && answers.main_driver_name ? answers.main_driver_name : name,
+        birth_date: answers.is_main_driver === 'no' && answers.main_driver_birth_date ? normalizeDate(answers.main_driver_birth_date) : birthDate,
+        profession: 'Autonomo',
+        sex: answers.is_main_driver === 'no' && answers.main_driver_sex ? normalizeSex(answers.main_driver_sex) : sex,
         marital_status: maritalStatus,
-        relationship: 'himself',
-        document,
+        relationship: answers.is_main_driver === 'no' ? 'other' : 'himself',
+        document: answers.is_main_driver === 'no' && answers.main_driver_document ? normalizeDigits(answers.main_driver_document) : document,
       },
       vehicle: {
         armored: false,

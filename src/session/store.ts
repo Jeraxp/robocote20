@@ -28,10 +28,18 @@ const ACTIVE_STEPS = [
   'residence_type',
   'residence_garage',
   'marital_status',
+  // Questionário de risco — responsabilidade do segurado (Jera 2026-05-17).
+  'is_main_driver',
+  'main_driver_document',
+  'young_driver',
+  'studies',
+  'study_garage',
+  'work_commute',
+  'work_garage',
+  'monthly_km',
   'coverage',
   'contact',
-  'driver_birth_date',
-  'driver_sex',
+  // driver_birth_date + driver_sex eliminados — vêm via lookup /insured do CPF
   'document',
   'quote_link',
 ] as const;

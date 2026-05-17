@@ -56,6 +56,18 @@ export interface PendingProposal {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Confirmação pendente de placa que decode-plate não encontrou.
+ * Permite o fluxo: "esta placa não retornou, está correta?" → confirma → manual,
+ * ou nova placa → tenta de novo. `finalOffer=true` quando já houve 2+ tentativas
+ * sem sucesso — próximo "sim" cai direto pra fallback manual.
+ */
+export interface PendingPlateConfirmation {
+  plate: string;
+  attempts: number;
+  finalOffer: boolean;
+}
+
 export interface SessionInteraction {
   id: string;
   at: number;
@@ -83,6 +95,9 @@ export interface SessionState {
 
   /** Proposta aguardando confirmação explícita do lead (sim/não). */
   pendingProposal: PendingProposal | null;
+
+  /** Placa que falhou decode aguardando confirmação ou correção pelo lead. */
+  pendingPlateConfirmation: PendingPlateConfirmation | null;
 
   lastGuid: string | null;
   /** Timestamp do último calculate disparado — usado pra idempotência (lock 60s). */
@@ -127,6 +142,7 @@ export function createInitialSessionState(key: SessionKey): SessionState {
     customerFirstName: null,
     coveragePreference: null,
     pendingProposal: null,
+    pendingPlateConfirmation: null,
     lastGuid: null,
     lastCalculateAt: null,
     createdAt: now,

@@ -305,96 +305,177 @@ export async function processWhatsappTurn(
     session = await sessionStore.upsert({ ...session, pendingProposal: null });
   }
 
-  // ─── Step vehicle_plate: tenta decode automático via Segfy ───────────────────
-  // Se lead manda placa válida e decode retorna OK, preenchemos brand+year+model
-  // de uma vez e pulamos direto pra `usage` (poupa 3 turnos). Se manda skip
-  // ("sem placa", "não tenho"), cai pra vehicle_brand manual. Senão, handler IA.
+  // ─── Step vehicle_plate: decode automático + UX de confirmação inteligente ──
+  // Fluxo:
+  //   1. Lead manda placa → decode → OK: pula 3 steps. Falha: pergunta "está correta?"
+  //   2. Lead confirma placa errada → fallback manual com mensagem clara.
+  //   3. Lead manda placa corrigida → tenta de novo. Se falhar 2x, oferece manual.
+  //   4. Skip explícito ("sem placa", "pular") → manual.
   if (session.stepId === 'vehicle_plate') {
     const promotedStage = session.pipelineStage === 'novos_leads' ? 'contatados' : session.pipelineStage;
 
-    if (looksLikeNoPlateSkip(inbound.text)) {
-      const skipped: SessionState = {
+    // ─── Helpers locais pra reaproveitar dentro do bloco ──────────────────────
+    const goManualBrand = async (
+      reply: string,
+      action: string,
+    ): Promise<{ replySent: string; action: AssistantAction; sessionAfter: SessionState }> => {
+      const next: SessionState = {
         ...session,
         stepId: 'vehicle_brand',
         recentMessages: [],
         pendingProposal: null,
+        pendingPlateConfirmation: null,
         pipelineStage: promotedStage,
       };
-      const reply = `Sem problema. ${STEP_PROMPT.vehicle_brand}`;
       await sendWhatsappText(inbound.fromPhone, reply);
-      const persisted = await sessionStore.upsert(recordTurn(skipped, inbound, reply, 'skip_plate'));
+      const persisted = await sessionStore.upsert(recordTurn(next, inbound, reply, action));
       return { replySent: reply, action: 'answer_step', sessionAfter: persisted };
+    };
+
+    const fillFromOutcome = async (
+      plate: string,
+      outcome: ReturnType<typeof pickPlateDecodeOutcome>,
+    ): Promise<{ replySent: string; action: AssistantAction; sessionAfter: SessionState }> => {
+      if (!outcome.brand || !outcome.model || !outcome.modelYear) {
+        // Defensivo — não deveria chegar aqui com outcome.ok=true sem dados
+        return goManualBrand(`Não consegui achar pela placa. Sem problema — ${STEP_PROMPT.vehicle_brand}`, 'plate_decode_failed');
+      }
+      const filled: SessionState = {
+        ...session,
+        answers: {
+          ...session.answers,
+          vehicle_plate: { id: 'vehicle_plate', label: 'Placa', value: plate, rawValue: plate },
+          vehicle_brand: {
+            id: 'vehicle_brand',
+            label: 'Marca',
+            value: outcome.brand.text,
+            rawValue: outcome.brand.id,
+            metadata: { brand_text: outcome.brand.text, brand_value: outcome.brand.value },
+          },
+          vehicle_year: {
+            id: 'vehicle_year',
+            label: 'Ano',
+            value: String(outcome.modelYear),
+            rawValue: String(outcome.modelYear),
+          },
+          vehicle_model: {
+            id: 'vehicle_model',
+            label: 'Modelo',
+            value: outcome.model.value,
+            rawValue: outcome.model.id,
+            metadata: {
+              model_id: outcome.model.id,
+              fipe_code: outcome.model.fipeCode,
+              fipe_value: outcome.model.fipeValue,
+              fuel_type: outcome.model.fuelType,
+              model_text: outcome.model.text,
+            },
+          },
+        },
+        stepId: 'usage',
+        recentMessages: [],
+        pendingProposal: null,
+        pendingPlateConfirmation: null,
+        pipelineStage: promotedStage,
+      };
+      const reply = `Anotei: ${outcome.brand.text} ${outcome.model.value} ${outcome.modelYear} 🚗\n\n${STEP_PROMPT.usage}`;
+      await sendWhatsappText(inbound.fromPhone, reply);
+      const persisted = await sessionStore.upsert(recordTurn(filled, inbound, reply, 'plate_decoded'));
+      return { replySent: reply, action: 'answer_step', sessionAfter: persisted };
+    };
+
+    // ─── Tem confirmação pendente de placa? ────────────────────────────────────
+    if (session.pendingPlateConfirmation) {
+      const pending = session.pendingPlateConfirmation;
+
+      // Skip explícito ainda funciona aqui
+      if (looksLikeNoPlateSkip(inbound.text)) {
+        return goManualBrand(`Sem problema. ${STEP_PROMPT.vehicle_brand}`, 'skip_plate');
+      }
+
+      // Lead confirmou que a placa está correta (mesmo decode falhando)
+      if (looksLikeConfirmation(inbound.text)) {
+        const reply = pending.finalOffer
+          ? `Beleza. ${STEP_PROMPT.vehicle_brand}`
+          : `Ok, como os dados não retornaram vou fazer algumas perguntas sobre o veículo.\n\n${STEP_PROMPT.vehicle_brand}`;
+        return goManualBrand(reply, 'plate_confirmed_unfound');
+      }
+
+      // Lead negou — pede a placa de novo
+      if (looksLikeDenial(inbound.text)) {
+        const next: SessionState = {
+          ...session,
+          pendingPlateConfirmation: null,
+          pipelineStage: promotedStage,
+        };
+        const reply = `Tá. Me passa a placa de novo, por favor.`;
+        await sendWhatsappText(inbound.fromPhone, reply);
+        const persisted = await sessionStore.upsert(recordTurn(next, inbound, reply, 'plate_retry'));
+        return { replySent: reply, action: 'ask_clarification', sessionAfter: persisted };
+      }
+
+      // Tentou outra placa?
+      const newPlate = extractPlateFromMessage(inbound.text);
+      if (newPlate) {
+        try {
+          const resp = await decodePlate(newPlate);
+          const outcome = pickPlateDecodeOutcome(resp.body);
+          if (outcome.ok) {
+            return fillFromOutcome(newPlate, outcome);
+          }
+        } catch (e) {
+          console.warn(`decode-plate (retry) falhou: ${(e as Error).message}`);
+        }
+        // Nova placa também falhou → finalOffer
+        const next: SessionState = {
+          ...session,
+          pendingPlateConfirmation: {
+            plate: newPlate,
+            attempts: pending.attempts + 1,
+            finalOffer: true,
+          },
+          recentMessages: [],
+          pipelineStage: promotedStage,
+        };
+        const reply = `Vi que você alterou, mas mesmo assim não retornou. Prefere me informar os dados do veículo manualmente?`;
+        await sendWhatsappText(inbound.fromPhone, reply);
+        const persisted = await sessionStore.upsert(recordTurn(next, inbound, reply, 'plate_decode_failed_again'));
+        return { replySent: reply, action: 'ask_clarification', sessionAfter: persisted };
+      }
+
+      // Mensagem ambígua — deixa o handler IA processar
     }
 
+    // ─── Skip imediato (sem proposta pendente) ─────────────────────────────────
+    if (looksLikeNoPlateSkip(inbound.text)) {
+      return goManualBrand(`Sem problema. ${STEP_PROMPT.vehicle_brand}`, 'skip_plate');
+    }
+
+    // ─── Primeira tentativa de placa ───────────────────────────────────────────
     const plate = extractPlateFromMessage(inbound.text);
     if (plate) {
-      let outcomeOk = false;
       try {
         const resp = await decodePlate(plate);
         const outcome = pickPlateDecodeOutcome(resp.body);
-        if (outcome.ok && outcome.brand && outcome.model && outcome.modelYear) {
-          outcomeOk = true;
-          const filled: SessionState = {
-            ...session,
-            answers: {
-              ...session.answers,
-              vehicle_plate: { id: 'vehicle_plate', label: 'Placa', value: plate, rawValue: plate },
-              vehicle_brand: {
-                id: 'vehicle_brand',
-                label: 'Marca',
-                value: outcome.brand.text,
-                rawValue: outcome.brand.id,
-                metadata: { brand_text: outcome.brand.text, brand_value: outcome.brand.value },
-              },
-              vehicle_year: {
-                id: 'vehicle_year',
-                label: 'Ano',
-                value: String(outcome.modelYear),
-                rawValue: String(outcome.modelYear),
-              },
-              vehicle_model: {
-                id: 'vehicle_model',
-                label: 'Modelo',
-                value: outcome.model.value,
-                rawValue: outcome.model.id,
-                metadata: {
-                  model_id: outcome.model.id,
-                  fipe_code: outcome.model.fipeCode,
-                  fipe_value: outcome.model.fipeValue,
-                  fuel_type: outcome.model.fuelType,
-                  model_text: outcome.model.text,
-                },
-              },
-            },
-            stepId: 'usage',
-            recentMessages: [],
-            pendingProposal: null,
-            pipelineStage: promotedStage,
-          };
-          const reply = `Anotei: ${outcome.brand.text} ${outcome.model.value} ${outcome.modelYear} 🚗\n\n${STEP_PROMPT.usage}`;
-          await sendWhatsappText(inbound.fromPhone, reply);
-          const persisted = await sessionStore.upsert(recordTurn(filled, inbound, reply, 'plate_decoded'));
-          return { replySent: reply, action: 'answer_step', sessionAfter: persisted };
+        if (outcome.ok) {
+          return fillFromOutcome(plate, outcome);
         }
       } catch (e) {
         console.warn(`decode-plate falhou: ${(e as Error).message}`);
       }
-      if (!outcomeOk) {
-        // Placa válida em formato mas Segfy não achou (ou erro) → fallback manual
-        const fallback: SessionState = {
-          ...session,
-          stepId: 'vehicle_brand',
-          recentMessages: [],
-          pendingProposal: null,
-          pipelineStage: promotedStage,
-        };
-        const reply = `Não consegui achar pela placa. Sem problema — ${STEP_PROMPT.vehicle_brand}`;
-        await sendWhatsappText(inbound.fromPhone, reply);
-        const persisted = await sessionStore.upsert(recordTurn(fallback, inbound, reply, 'plate_decode_failed'));
-        return { replySent: reply, action: 'answer_step', sessionAfter: persisted };
-      }
+      // Decode falhou → pede confirmação da placa antes de cair pra manual
+      const next: SessionState = {
+        ...session,
+        pendingPlateConfirmation: { plate, attempts: 1, finalOffer: false },
+        recentMessages: [],
+        pipelineStage: promotedStage,
+      };
+      const reply = `A placa informada não retornou o seu veículo. Confirme se está correta — Placa "${plate}"?`;
+      await sendWhatsappText(inbound.fromPhone, reply);
+      const persisted = await sessionStore.upsert(recordTurn(next, inbound, reply, 'plate_confirm_request'));
+      return { replySent: reply, action: 'ask_clarification', sessionAfter: persisted };
     }
-    // Mensagem não é placa nem skip — deixa o handler IA pedir clarification.
+    // Sem placa identificada e sem pendência — handler IA pede esclarecimento.
   }
 
   // Step quote_link com confirmação direta → dispara cotação sem passar pelo modelo.

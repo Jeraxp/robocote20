@@ -1,5 +1,14 @@
 import { Hono } from 'hono';
-import { createHash } from 'crypto';
+import { createHash, timingSafeEqual } from 'crypto';
+import type { Context } from 'hono';
+import { adminStore } from '../admin/store.js';
+import {
+  canManageUsers,
+  canManageWhatsapp,
+  resolveAuthContext,
+  tenantScope,
+  writableTenantId,
+} from '../auth/context.js';
 import { getQuoteSummary, type QuoteCustomerInfo, type CoveragePreference } from '../quote/summary.js';
 import { autoF1QuoteRequestSchema, runAutoF1Quote } from '../journey/autoF1.js';
 import { handleAutoF1AssistantMessage, parseAssistantRequest } from '../assistant/autoF1.js';
@@ -12,15 +21,49 @@ import {
   type SessionAnswer,
   type SessionState,
 } from '../session/store.js';
+import {
+  connectEvolutionInstance,
+  createEvolutionInstance,
+  getEvolutionConnectionState,
+} from '../channels/whatsapp/evolution.js';
 
 export const api = new Hono();
+
+function secureTokenEquals(candidate: string, expected: string): boolean {
+  const candidateHash = createHash('sha256').update(candidate).digest();
+  const expectedHash = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(candidateHash, expectedHash);
+}
+
+function readPanelToken(c: Context): string {
+  const explicit = c.req.header('x-robocote-panel-token')?.trim();
+  if (explicit) return explicit;
+
+  const authorization = c.req.header('authorization')?.trim();
+  if (authorization?.toLowerCase().startsWith('bearer ')) {
+    return authorization.slice(7).trim();
+  }
+  return '';
+}
+
+function requirePanelAccess(c: Context): Response | null {
+  const expected = process.env.ROBOCOTE_PANEL_TOKEN?.trim();
+  if (!expected) return null;
+
+  const token = readPanelToken(c);
+  if (token && secureTokenEquals(token, expected)) return null;
+
+  return c.json({
+    ok: false,
+    authRequired: true,
+    error: 'acesso ao painel requer token',
+  }, 401);
+}
 
 // Cache em memória do contexto do lead por GUID — sobrevive entre runAutoF1Quote e getQuoteSummary.
 // Suficiente pro spike; quando F4 entrar com Postgres, vira tabela `quote_meta`.
 const QUOTE_CUSTOMER_CACHE = new Map<string, { info: QuoteCustomerInfo; expiresAt: number }>();
 const QUOTE_CUSTOMER_TTL_MS = 1000 * 60 * 60 * 24; // 24h
-const ROBOCOTE_TENANT_ID = process.env.ROBOCOTE_TENANT_ID?.trim() || 'rpi';
-
 function cacheCustomerForGuid(guid: string, info: QuoteCustomerInfo): void {
   QUOTE_CUSTOMER_CACHE.set(guid, { info, expiresAt: Date.now() + QUOTE_CUSTOMER_TTL_MS });
 }
@@ -135,6 +178,27 @@ function normalizeManualPhone(value: unknown): string {
   return digits.startsWith('55') ? digits : `55${digits}`;
 }
 
+function normalizeDocumentType(value: unknown): 'cpf' | 'cnpj' | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'cpf' || normalized === 'cnpj') return normalized;
+  return null;
+}
+
+function normalizeDocument(value: unknown, type: 'cpf' | 'cnpj'): string {
+  if (typeof value !== 'string') return '';
+  const digits = value.replace(/\D/g, '');
+  const expected = type === 'cpf' ? 11 : 14;
+  return digits.length === expected ? digits : '';
+}
+
+function normalizeEmail(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const email = value.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return '';
+  return email.slice(0, 180);
+}
+
 function manualAnswer(id: string, label: string, value: string): SessionAnswer {
   return { id, label, value, rawValue: value };
 }
@@ -246,6 +310,11 @@ function panelMetrics(leads: ReturnType<typeof serializeLead>[]) {
   };
 }
 
+async function canAccessWhatsappInstance(auth: ReturnType<typeof resolveAuthContext>, instanceName: string): Promise<boolean> {
+  const instances = await adminStore.listWhatsappInstances(auth, auth.isSuperadmin && !auth.tenantId ? undefined : auth.tenantId ?? undefined);
+  return instances.some((item) => item.evolutionInstanceName === instanceName);
+}
+
 api.get('/jornadas/auto/f1', (c) =>
   c.json({
     ok: true,
@@ -352,6 +421,199 @@ api.get('/jornadas/auto/f1', (c) =>
   }),
 );
 
+api.get('/admin/me', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const auth = resolveAuthContext(c);
+  const tenants = await adminStore.listTenants(auth);
+  return c.json({
+    ok: true,
+    auth,
+    capabilities: {
+      manageUsers: canManageUsers(auth),
+      manageWhatsapp: canManageWhatsapp(auth),
+      viewAllTenants: auth.isSuperadmin,
+    },
+    tenants,
+    navigation: [
+      { key: 'leads', label: 'Leads / CRM', enabled: true },
+      { key: 'tenants', label: 'Corretoras', enabled: auth.isSuperadmin },
+      { key: 'users', label: 'Usuários', enabled: canManageUsers(auth) },
+      { key: 'whatsapp', label: 'WhatsApp', enabled: canManageWhatsapp(auth) },
+      { key: 'settings', label: 'Configurações', enabled: auth.role !== 'operador' },
+      { key: 'support', label: 'Suporte Robocote', enabled: auth.isSuperadmin },
+    ],
+  });
+});
+
+api.get('/admin/tenants', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const auth = resolveAuthContext(c);
+  if (!auth.isSuperadmin) {
+    return c.json({ ok: false, error: 'apenas superadmin pode listar corretoras' }, 403);
+  }
+  return c.json({ ok: true, tenants: await adminStore.listTenants(auth) });
+});
+
+api.post('/admin/tenants', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const auth = resolveAuthContext(c);
+  if (!auth.isSuperadmin) {
+    return c.json({ ok: false, error: 'apenas superadmin pode criar corretoras' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => null) as {
+    documentType?: string;
+    document?: string;
+    brokerName?: string;
+    brokerPhone?: string;
+    managerName?: string;
+    managerEmail?: string;
+    managerWhatsapp?: string;
+  } | null;
+
+  const documentType = normalizeDocumentType(body?.documentType);
+  if (!documentType) {
+    return c.json({ ok: false, error: 'tipo de documento deve ser cpf ou cnpj' }, 400);
+  }
+
+  const document = normalizeDocument(body?.document, documentType);
+  const brokerName = cleanText(body?.brokerName, 140);
+  const brokerPhone = normalizeManualPhone(body?.brokerPhone);
+  const managerName = cleanText(body?.managerName, 120);
+  const managerEmail = normalizeEmail(body?.managerEmail);
+  const managerWhatsapp = normalizeManualPhone(body?.managerWhatsapp);
+
+  if (!document) return c.json({ ok: false, error: `${documentType.toUpperCase()} inválido` }, 400);
+  if (!brokerName) return c.json({ ok: false, error: 'nome da corretora é obrigatório' }, 400);
+  if (!brokerPhone) return c.json({ ok: false, error: 'telefone principal válido é obrigatório' }, 400);
+  if (!managerName) return c.json({ ok: false, error: 'nome do gestor é obrigatório' }, 400);
+  if (!managerEmail) return c.json({ ok: false, error: 'email do gestor válido é obrigatório' }, 400);
+  if (!managerWhatsapp) return c.json({ ok: false, error: 'WhatsApp do gestor válido é obrigatório' }, 400);
+
+  try {
+    const result = await adminStore.createTenantWithManager({
+      documentType,
+      document,
+      brokerName,
+      brokerPhone,
+      managerName,
+      managerEmail,
+      managerWhatsapp,
+    });
+    return c.json({ ok: true, ...result }, 201);
+  } catch (e) {
+    return c.json({ ok: false, error: (e as Error).message }, 409);
+  }
+});
+
+api.get('/admin/users', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const auth = resolveAuthContext(c);
+  if (!canManageUsers(auth)) {
+    return c.json({ ok: false, error: 'usuário sem permissão para gerenciar usuários' }, 403);
+  }
+  const tenantId = c.req.query('tenantId') || auth.tenantId || undefined;
+  return c.json({ ok: true, users: await adminStore.listUsers(auth, tenantId) });
+});
+
+api.get('/admin/whatsapp-instances', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const auth = resolveAuthContext(c);
+  if (!canManageWhatsapp(auth)) {
+    return c.json({ ok: false, error: 'usuário sem permissão para gerenciar WhatsApp' }, 403);
+  }
+  const tenantId = c.req.query('tenantId') || auth.tenantId || undefined;
+  return c.json({ ok: true, instances: await adminStore.listWhatsappInstances(auth, tenantId) });
+});
+
+api.post('/admin/whatsapp-instances', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const auth = resolveAuthContext(c);
+  if (!canManageWhatsapp(auth)) {
+    return c.json({ ok: false, error: 'usuário sem permissão para gerenciar WhatsApp' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => null) as {
+    tenantId?: string;
+    instanceName?: string;
+    ownerPhone?: string;
+    createInEvolution?: boolean;
+  } | null;
+
+  const tenantId = writableTenantId(auth, body?.tenantId);
+  const instanceName = cleanText(body?.instanceName, 80) || `robocote-${tenantId}-${Date.now()}`;
+  const ownerPhone = normalizeManualPhone(body?.ownerPhone);
+
+  if (body?.createInEvolution) {
+    const created = await createEvolutionInstance({
+      instanceName,
+      ownerPhone: ownerPhone || undefined,
+    });
+    if (!created.ok) {
+      return c.json({ ok: false, error: created.error, evolution: created }, 502);
+    }
+  }
+
+  const record = await adminStore.createWhatsappInstance({
+    tenantId,
+    evolutionInstanceName: instanceName,
+    ownerPhone: ownerPhone || undefined,
+  });
+  return c.json({ ok: true, instance: record }, 201);
+});
+
+api.post('/admin/whatsapp-instances/:instanceName/connect', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const auth = resolveAuthContext(c);
+  if (!canManageWhatsapp(auth)) {
+    return c.json({ ok: false, error: 'usuário sem permissão para gerenciar WhatsApp' }, 403);
+  }
+
+  const instanceName = c.req.param('instanceName');
+  if (!(await canAccessWhatsappInstance(auth, instanceName))) {
+    return c.json({ ok: false, error: 'instância WhatsApp fora do escopo do usuário' }, 404);
+  }
+  const result = await connectEvolutionInstance(instanceName);
+  if (!result.ok) {
+    return c.json({ ok: false, error: result.error, evolution: result }, 502);
+  }
+  return c.json({ ok: true, qr: result });
+});
+
+api.get('/admin/whatsapp-instances/:instanceName/state', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const auth = resolveAuthContext(c);
+  if (!canManageWhatsapp(auth)) {
+    return c.json({ ok: false, error: 'usuário sem permissão para gerenciar WhatsApp' }, 403);
+  }
+
+  const instanceName = c.req.param('instanceName');
+  if (!(await canAccessWhatsappInstance(auth, instanceName))) {
+    return c.json({ ok: false, error: 'instância WhatsApp fora do escopo do usuário' }, 404);
+  }
+  const result = await getEvolutionConnectionState(instanceName);
+  if (!result.ok) {
+    return c.json({ ok: false, error: result.error, evolution: result }, 502);
+  }
+  return c.json({ ok: true, state: result });
+});
+
 api.get('/cotacoes/:guid/resumo', async (c) => {
   const guid = c.req.param('guid').trim();
   if (!guid) {
@@ -452,10 +714,15 @@ api.post('/assistente/rag/search', async (c) => {
 });
 
 api.get('/painel/leads', async (c) => {
-  const sessions = await sessionStore.list();
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const auth = resolveAuthContext(c);
+  const sessions = await sessionStore.list(tenantScope(auth));
   const leads = sessions.map(serializeLead);
   return c.json({
     ok: true,
+    auth,
     metrics: panelMetrics(leads),
     leads,
     ts: new Date().toISOString(),
@@ -463,6 +730,9 @@ api.get('/painel/leads', async (c) => {
 });
 
 api.post('/painel/leads/manual', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
   const body = await c.req.json().catch(() => null) as {
     name?: string;
     phone?: string;
@@ -472,12 +742,14 @@ api.post('/painel/leads/manual', async (c) => {
     stage?: string;
   } | null;
 
+  const auth = resolveAuthContext(c);
   const name = cleanText(body?.name, 120);
   const phone = normalizeManualPhone(body?.phone);
   const source = cleanText(body?.source, 80);
   const vehicleHint = cleanText(body?.vehicleHint, 160);
   const notes = cleanText(body?.notes, 600);
   const stage = (body?.stage ?? 'novos_leads') as PipelineStage;
+  const tenantId = writableTenantId(auth, (body as { tenantId?: string } | null)?.tenantId);
 
   if (!name) {
     return c.json({ ok: false, error: 'nome do lead é obrigatório' }, 400);
@@ -489,7 +761,7 @@ api.post('/painel/leads/manual', async (c) => {
     return c.json({ ok: false, error: 'stage inválido' }, 400);
   }
 
-  const key = { tenantId: ROBOCOTE_TENANT_ID, channel: 'whatsapp' as const, channelUserId: phone };
+  const key = { tenantId, channel: 'whatsapp' as const, channelUserId: phone };
   const existing = await sessionStore.get(key);
   const base = existing ?? createInitialSessionState(key);
   const answers: Record<string, SessionAnswer> = {
@@ -529,14 +801,18 @@ api.post('/painel/leads/manual', async (c) => {
 });
 
 api.patch('/painel/leads/:id/stage', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
   const id = c.req.param('id');
   const body = await c.req.json().catch(() => null) as { stage?: string } | null;
+  const auth = resolveAuthContext(c);
   const stage = body?.stage as PipelineStage | undefined;
   if (!stage || !PIPELINE_STAGES.some((item) => item.key === stage)) {
     return c.json({ ok: false, error: 'stage inválido' }, 400);
   }
 
-  const sessions = await sessionStore.list();
+  const sessions = await sessionStore.list(tenantScope(auth));
   const session = sessions.find((item) => stableLeadId(item) === id);
   if (!session) {
     return c.json({ ok: false, error: 'lead não encontrado' }, 404);

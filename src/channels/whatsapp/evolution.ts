@@ -145,6 +145,168 @@ export interface SendTextResult {
   error?: string;
 }
 
+export interface EvolutionCreateInstanceInput {
+  instanceName: string;
+  ownerPhone?: string;
+}
+
+export interface EvolutionCreateInstanceResult {
+  ok: boolean;
+  status: number;
+  instanceName: string;
+  body?: unknown;
+  error?: string;
+}
+
+export interface EvolutionConnectResult {
+  ok: boolean;
+  status: number;
+  instanceName: string;
+  pairingCode?: string;
+  code?: string;
+  base64?: string;
+  count?: number;
+  body?: unknown;
+  error?: string;
+}
+
+export interface EvolutionConnectionStateResult {
+  ok: boolean;
+  status: number;
+  instanceName: string;
+  state?: string;
+  body?: unknown;
+  error?: string;
+}
+
+function instanceCreateUrl(): string {
+  return new URL('/instance/create', EVOLUTION_BASE_URL).toString();
+}
+
+function instanceConnectUrl(instanceName: string): string {
+  return new URL(`/instance/connect/${encodeURIComponent(instanceName)}`, EVOLUTION_BASE_URL).toString();
+}
+
+function instanceStateUrl(instanceName: string): string {
+  return new URL(`/instance/connectionState/${encodeURIComponent(instanceName)}`, EVOLUTION_BASE_URL).toString();
+}
+
+async function readEvolutionBody(response: Response): Promise<unknown> {
+  const raw = await response.text();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function bodyRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function bodyString(body: Record<string, unknown>, key: string): string | undefined {
+  const value = body[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function bodyNumber(body: Record<string, unknown>, key: string): number | undefined {
+  const value = body[key];
+  return typeof value === 'number' ? value : undefined;
+}
+
+export async function createEvolutionInstance(input: EvolutionCreateInstanceInput): Promise<EvolutionCreateInstanceResult> {
+  if (!isEvolutionConfigured()) {
+    return { ok: false, status: 0, instanceName: input.instanceName, error: 'evolution_not_configured' };
+  }
+
+  try {
+    const response = await fetch(instanceCreateUrl(), {
+      method: 'POST',
+      headers: {
+        apikey: EVOLUTION_API_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        instanceName: input.instanceName,
+        integration: 'WHATSAPP-BAILEYS',
+        qrcode: true,
+        number: input.ownerPhone,
+        rejectCall: true,
+        groupsIgnore: true,
+        readMessages: false,
+        readStatus: false,
+        syncFullHistory: false,
+      }),
+    });
+
+    const body = await readEvolutionBody(response);
+    return {
+      ok: response.ok,
+      status: response.status,
+      instanceName: input.instanceName,
+      body,
+      error: response.ok ? undefined : `evolution_http_${response.status}`,
+    };
+  } catch (e) {
+    return { ok: false, status: 0, instanceName: input.instanceName, error: (e as Error).message };
+  }
+}
+
+export async function connectEvolutionInstance(instanceName: string): Promise<EvolutionConnectResult> {
+  if (!isEvolutionConfigured()) {
+    return { ok: false, status: 0, instanceName, error: 'evolution_not_configured' };
+  }
+
+  try {
+    const response = await fetch(instanceConnectUrl(instanceName), {
+      method: 'GET',
+      headers: { apikey: EVOLUTION_API_KEY },
+    });
+    const body = await readEvolutionBody(response);
+    const record = bodyRecord(body);
+    return {
+      ok: response.ok,
+      status: response.status,
+      instanceName,
+      pairingCode: bodyString(record, 'pairingCode'),
+      code: bodyString(record, 'code'),
+      base64: bodyString(record, 'base64') ?? bodyString(record, 'qrcode'),
+      count: bodyNumber(record, 'count'),
+      body,
+      error: response.ok ? undefined : `evolution_http_${response.status}`,
+    };
+  } catch (e) {
+    return { ok: false, status: 0, instanceName, error: (e as Error).message };
+  }
+}
+
+export async function getEvolutionConnectionState(instanceName: string): Promise<EvolutionConnectionStateResult> {
+  if (!isEvolutionConfigured()) {
+    return { ok: false, status: 0, instanceName, error: 'evolution_not_configured' };
+  }
+
+  try {
+    const response = await fetch(instanceStateUrl(instanceName), {
+      method: 'GET',
+      headers: { apikey: EVOLUTION_API_KEY },
+    });
+    const body = await readEvolutionBody(response);
+    const record = bodyRecord(body);
+    const nested = bodyRecord(record.instance);
+    return {
+      ok: response.ok,
+      status: response.status,
+      instanceName,
+      state: bodyString(record, 'state') ?? bodyString(record, 'status') ?? bodyString(nested, 'state') ?? bodyString(nested, 'status'),
+      body,
+      error: response.ok ? undefined : `evolution_http_${response.status}`,
+    };
+  } catch (e) {
+    return { ok: false, status: 0, instanceName, error: (e as Error).message };
+  }
+}
+
 /**
  * Envia mensagem de texto pra um número via Evolution API.
  * Splits longos (> 4096 chars) não tratados aqui — quem chama deve respeitar limite de canal.

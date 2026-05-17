@@ -322,7 +322,7 @@ function AiComposer({
     >
       <div className="ai-composer-label">
         <Sparkles size={15} />
-        <span>Vivi IA</span>
+        <span>Robocote IA</span>
       </div>
       <input
         value={value}
@@ -445,7 +445,7 @@ export function DeterministicChat(): JSX.Element {
   const [models, setModels] = useState<CatalogModel[]>([]);
   const [assistantLoading, setAssistantLoading] = useState(false);
   // Buffer das últimas falas do lead que ainda não viraram answer_step.
-  // Vivi consulta isso pra lembrar de pistas anteriores (ex: lead disse modelo no step de ano).
+  // Robocote consulta isso pra lembrar de pistas anteriores (ex: lead disse modelo no step de ano).
   const [recentMessages, setRecentMessages] = useState<string[]>([]);
   const feedRef = useRef<HTMLDivElement | null>(null);
 
@@ -830,7 +830,7 @@ export function DeterministicChat(): JSX.Element {
         <div>
           <span>Robocote IA</span>
           <h1>Webchat F1</h1>
-          <p>A Vivi conduz a cotação em conversa natural, valida o roteiro seguro e entrega o link consultivo.</p>
+          <p>O Robocote conduz a cotação em conversa natural, valida o roteiro seguro e entrega o link consultivo.</p>
         </div>
         <div className="webchat-status-card">
           <ShieldCheck size={22} />
@@ -844,7 +844,7 @@ export function DeterministicChat(): JSX.Element {
           <header className="chat-window-header">
             <img src={robocoteLogo} alt="" />
             <div>
-              <strong>Vivi</strong>
+              <strong>Robocote</strong>
               <span>online · conversa por IA</span>
             </div>
             <button type="button" onClick={resetFlow} aria-label="Reiniciar fluxo">

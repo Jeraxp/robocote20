@@ -254,7 +254,7 @@ export async function processWhatsappTurn(
   }
 
   // ─── P1 — Proposta pendente aguardando confirmação ──────────────────────────────
-  // Quando a Vivi propôs algo usando pista anterior e marcou pendingConfirmation,
+  // Quando a Robocotepropôs algo usando pista anterior e marcou pendingConfirmation,
   // a próxima mensagem do lead pode ser "sim/não". Interceptamos antes do handler
   // pra evitar que "sim" vire resposta do próximo step.
   if (session.pendingProposal) {
@@ -376,7 +376,7 @@ export async function processWhatsappTurn(
     } else {
       // Avança normal: aplica answer no estado e move pro próximo step.
       nextSession = applyProposalAndAdvance(nextSession, proposal);
-      // P8 — Concatena a pergunta do próximo step pra Vivi não deixar
+      // P8 — Concatena a pergunta do próximo step pra Robocotenão deixar
       // o lead no escuro depois do "Anotei". No WhatsApp não tem rail visual
       // mostrando o que vem em seguida — quem conduz é a fala dela.
       const nextStep = nextSession.stepId;
@@ -419,7 +419,7 @@ function nextStepAfter(stepId: StepId): SessionState['stepId'] {
   return STEP_ORDER[idx + 1] ?? 'complete';
 }
 
-/** Pergunta padrão da Vivi pra cada step — usado quando avançamos via confirmação direta. */
+/** Pergunta padrão da Robocotepra cada step — usado quando avançamos via confirmação direta. */
 const STEP_PROMPT: Record<StepId, string> = {
   name: 'Pra começar, qual é seu nome completo?',
   vehicle_brand: 'Qual é a marca do veículo?',

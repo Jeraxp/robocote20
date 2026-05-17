@@ -8,6 +8,7 @@ import { whatsapp } from './routes/whatsapp.js';
 import { getAssistantModelConfig } from './assistant/autoF1.js';
 import { getRagConfig } from './assistant/rag.js';
 import { getEvolutionConfig } from './channels/whatsapp/evolution.js';
+import { getPostgresConfig } from './db/postgres.js';
 
 const app = new Hono();
 
@@ -23,6 +24,7 @@ app.get('/health', (c) => {
   const assistant = getAssistantModelConfig();
   const rag = getRagConfig();
   const evolution = getEvolutionConfig();
+  const postgres = getPostgresConfig();
 
   return c.json({
     ok: true,
@@ -45,6 +47,9 @@ app.get('/health', (c) => {
     evolution_configured: evolution.configured,
     evolution_instance: evolution.instance || null,
     evolution_webhook_secret_configured: evolution.webhookSecretConfigured,
+    postgres_configured: postgres.configured,
+    postgres_ssl: postgres.ssl,
+    session_store: postgres.configured ? 'postgres' : 'memory',
     ts: new Date().toISOString(),
   });
 });

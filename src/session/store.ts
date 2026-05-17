@@ -11,6 +11,7 @@
  */
 
 import type { CoveragePreference } from '../quote/summary.js';
+import { getPostgresPool, isPostgresConfigured } from '../db/postgres.js';
 
 export type SessionChannel = 'webchat' | 'whatsapp';
 export type PipelineStage = 'novos_leads' | 'contatados' | 'em_negociacao' | 'sem_retorno' | 'vendas' | 'perdido';
@@ -44,7 +45,7 @@ export interface SessionAnswer {
 }
 
 /**
- * Proposta pendente — Vivi sugeriu um valor (geralmente usando pista anterior)
+ * Proposta pendente — Robocotesugeriu um valor (geralmente usando pista anterior)
  * e está esperando "sim"/"não" do lead pra cravar e avançar o step.
  */
 export interface PendingProposal {
@@ -98,7 +99,7 @@ export interface SessionKey {
 
 export interface SessionStore {
   get(key: SessionKey): Promise<SessionState | null>;
-  list(): Promise<SessionState[]>;
+  list(filter?: { tenantId?: string }): Promise<SessionState[]>;
   upsert(state: SessionState): Promise<SessionState>;
   delete(key: SessionKey): Promise<void>;
   size(): Promise<number>;
@@ -150,10 +151,11 @@ export class InMemorySessionStore implements SessionStore {
     return entry.state;
   }
 
-  async list(): Promise<SessionState[]> {
+  async list(filter: { tenantId?: string } = {}): Promise<SessionState[]> {
     this.cleanupExpired();
     return [...this.store.values()]
       .map((entry) => entry.state)
+      .filter((state) => !filter.tenantId || state.tenantId === filter.tenantId)
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
@@ -186,6 +188,84 @@ export class InMemorySessionStore implements SessionStore {
   }
 }
 
+export class PostgresSessionStore implements SessionStore {
+  private readonly ttlMs: number;
+
+  constructor(ttlMs: number = DEFAULT_TTL_MS) {
+    this.ttlMs = ttlMs;
+  }
+
+  async get(key: SessionKey): Promise<SessionState | null> {
+    const result = await getPostgresPool().query(
+      `select state from lead_sessions
+       where tenant_id = $1 and channel = $2 and channel_user_id = $3 and expires_at > now()
+       limit 1`,
+      [key.tenantId, key.channel, key.channelUserId],
+    );
+    const state = result.rows[0]?.state as SessionState | undefined;
+    return state ?? null;
+  }
+
+  async list(filter: { tenantId?: string } = {}): Promise<SessionState[]> {
+    const pool = getPostgresPool();
+    const result = filter.tenantId
+      ? await pool.query(
+          `select state from lead_sessions
+           where tenant_id = $1 and expires_at > now()
+           order by updated_at desc`,
+          [filter.tenantId],
+        )
+      : await pool.query(
+          `select state from lead_sessions
+           where expires_at > now()
+           order by updated_at desc`,
+        );
+
+    return result.rows.map((row) => row.state as SessionState);
+  }
+
+  async upsert(state: SessionState): Promise<SessionState> {
+    const now = Date.now();
+    const next: SessionState = {
+      ...state,
+      pipelineStage: state.pipelineStage ?? 'novos_leads',
+      interactions: state.interactions ?? [],
+      updatedAt: now,
+    };
+    const expiresAt = new Date(now + this.ttlMs);
+
+    await getPostgresPool().query(
+      `insert into lead_sessions (tenant_id, channel, channel_user_id, state, expires_at, created_at, updated_at)
+       values ($1, $2, $3, $4::jsonb, $5, $6, $7)
+       on conflict (tenant_id, channel, channel_user_id)
+       do update set state = excluded.state, expires_at = excluded.expires_at, updated_at = excluded.updated_at`,
+      [
+        next.tenantId,
+        next.channel,
+        next.channelUserId,
+        JSON.stringify(next),
+        expiresAt,
+        new Date(next.createdAt),
+        new Date(next.updatedAt),
+      ],
+    );
+
+    return next;
+  }
+
+  async delete(key: SessionKey): Promise<void> {
+    await getPostgresPool().query(
+      'delete from lead_sessions where tenant_id = $1 and channel = $2 and channel_user_id = $3',
+      [key.tenantId, key.channel, key.channelUserId],
+    );
+  }
+
+  async size(): Promise<number> {
+    const result = await getPostgresPool().query('select count(*)::int as total from lead_sessions where expires_at > now()');
+    return Number(result.rows[0]?.total ?? 0);
+  }
+}
+
 export function appendSessionInteraction(
   state: SessionState,
   interaction: Omit<SessionInteraction, 'id' | 'at'> & { id?: string; at?: number },
@@ -208,6 +288,7 @@ export function appendSessionInteraction(
   };
 }
 
-// Instância singleton compartilhada. Pode ser substituída por PostgresSessionStore
-// quando F4 entrar — basta trocar a atribuição abaixo.
-export const sessionStore: SessionStore = new InMemorySessionStore();
+// Instância singleton compartilhada. Sem DATABASE_URL, o spike continua in-memory.
+export const sessionStore: SessionStore = isPostgresConfigured()
+  ? new PostgresSessionStore()
+  : new InMemorySessionStore();

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { getViviPersona } from './persona.js';
+import { getRobocotePersona } from './persona.js';
 import { loadCatalogForStep, stepNeedsCatalog } from '../catalog/auto.js';
 
 const TASKDUN_AI_BASE_URL = process.env.TASKDUN_AI_BASE_URL?.trim() ?? '';
@@ -54,7 +54,7 @@ const assistantRequestSchema = z.object({
       metadata: z.record(z.unknown()).optional(),
     })).optional().default({}),
     // Últimas mensagens do lead que NÃO viraram answer_step ainda.
-    // Permite à Vivi lembrar de pistas anteriores (ex: lead mencionou modelo no step de ano).
+    // Permite à Robocotelembrar de pistas anteriores (ex: lead mencionou modelo no step de ano).
     // PII deve estar mascarada pelo frontend antes de chegar aqui.
     recentMessages: z.array(z.string().max(400)).max(5).optional().default([]),
   }),
@@ -584,7 +584,7 @@ async function chatCompletion({
 
 function routerSystemPrompt(): string {
   return [
-    'Você é o roteador de intenção da Vivi, corretora digital da Robocote.',
+    'Você é o roteador de intenção do Robocote, corretor digital inteligente da Robocote/Taskdun.',
     'Sua função NÃO é falar com o cliente — é classificar a intenção do turno e extrair dado quando for o caso.',
     'Sempre retorne JSON válido. Nada de texto fora do JSON.',
     '',
@@ -687,7 +687,7 @@ function summarizeAnswers(answers: AssistantRequest['snapshot']['answers']): Rec
 }
 
 async function replySystemPrompt(channel: Channel, mode: AssistantMode): Promise<string> {
-  const persona = await getViviPersona();
+  const persona = await getRobocotePersona();
   const { maxChars, humanLabel } = channelLimits(channel);
 
   const modeBlock = mode === 'consult'
@@ -731,7 +731,7 @@ async function replySystemPrompt(channel: Channel, mode: AssistantMode): Promise
     '',
     '---',
     '',
-    'Sua saída: JSON válido { "reply": "<sua mensagem como Vivi>" }. Nada fora do JSON.',
+    'Sua saída: JSON válido { "reply": "<sua mensagem como Robocote>" }. Nada fora do JSON.',
   ].join('\n');
 }
 
@@ -742,7 +742,7 @@ async function replySystemPrompt(channel: Channel, mode: AssistantMode): Promise
  *   - Se houver overlap claro (containment, igualdade, prefixo), considera que veio da mensagem.
  *   - Se NÃO houver overlap, a info veio de turno anterior — `usedRecentHint = true`.
  *
- * Isso evita a Vivi dizer "pelo que você me passou antes" quando o lead acabou
+ * Isso evita a Robocotedizer "pelo que você me passou antes" quando o lead acabou
  * de dizer "Jeep" no step de marca.
  */
 function messageMatchesProposed(message: string, proposed: AssistantStepAnswer): boolean {
@@ -944,7 +944,7 @@ async function taskdunAi(request: AssistantRequest): Promise<AssistantResponse |
 
   const proposedAnswer = router.action === 'answer_step' ? proposedAnswerFromRouter(request, router) : undefined;
   // Se o router disse answer_step mas o valor não validou (catálogo, choice, etc),
-  // não derruba pra local — vira ask_clarification e a Vivi pede esclarecimento como humana.
+  // não derruba pra local — vira ask_clarification e a Robocotepede esclarecimento como humana.
   if (router.action === 'answer_step' && !proposedAnswer) {
     router.action = 'ask_clarification';
   }
@@ -1012,7 +1012,7 @@ export function getAssistantModelConfig(): {
 function mustStayLocal(request: AssistantRequest): boolean {
   // Só o CPF (step document) e CPF na mensagem fora do step ficam blindados em regra local.
   // Catálogo (brand/year/model) agora vai à IA: a validação server-side em proposedAnswerFromRouter
-  // garante que só ids reais entram, e a Vivi pode soar humana nesses turnos.
+  // garante que só ids reais entram, e a Robocotepode soar humana nesses turnos.
   return request.snapshot.stepId === 'document' || hasCpf(request.message);
 }
 

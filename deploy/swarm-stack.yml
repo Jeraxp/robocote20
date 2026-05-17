@@ -21,6 +21,19 @@ services:
       PORT: "3030"
       NODE_ENV: "production"
 
+      # Banco Robocote 2.0 — persistência multi-tenant e sessões.
+      DATABASE_URL: "${DATABASE_URL:-}"
+      DATABASE_SSL: "${DATABASE_SSL:-0}"
+      DATABASE_POOL_MAX: "${DATABASE_POOL_MAX:-10}"
+
+      # Auth alpha do painel. Token é obrigatório em produção quando preenchido.
+      ROBOCOTE_PANEL_TOKEN: "${ROBOCOTE_PANEL_TOKEN:-}"
+      ROBOCOTE_DEV_ROLE: "${ROBOCOTE_DEV_ROLE:-superadmin}"
+      ROBOCOTE_DEV_TENANT_ID: "${ROBOCOTE_DEV_TENANT_ID:-}"
+      ROBOCOTE_DEV_USER_ID: "${ROBOCOTE_DEV_USER_ID:-taskdun-superadmin}"
+      ROBOCOTE_DEV_USER_NAME: "${ROBOCOTE_DEV_USER_NAME:-Taskdun Superadmin}"
+      ROBOCOTE_DEV_USER_EMAIL: "${ROBOCOTE_DEV_USER_EMAIL:-admin@taskdun.com.br}"
+
       # Segfy Nova Jornada
       SEGFY_BASE_URL: "${SEGFY_BASE_URL:-https://api.automation.segfy.com}"
       SEGFY_SOCKET_URL: "${SEGFY_SOCKET_URL:-https://socket-io.segfy.com}"
@@ -37,7 +50,7 @@ services:
       ROBOCOTE_ANALYST_MODEL: "${ROBOCOTE_ANALYST_MODEL:-gpt-5.4}"
 
       # RAG (pendente curadoria)
-      ROBOCOTE_EMBEDDING_MODEL: "${ROBOCOTE_EMBEDDING_MODEL:-text-embedding-3-large}"
+      ROBOCOTE_EMBEDDING_MODEL: "${ROBOCOTE_EMBEDDING_MODEL:-text-embedding-3-small}"
       ROBOCOTE_VECTOR_STORE_ID: "${ROBOCOTE_VECTOR_STORE_ID:-}"
       ROBOCOTE_RAG_MAX_RESULTS: "${ROBOCOTE_RAG_MAX_RESULTS:-5}"
 
@@ -49,6 +62,8 @@ services:
 
       # Identidade do tenant + link público do Quote Room (vai no WhatsApp)
       ROBOCOTE_TENANT_ID: "${ROBOCOTE_TENANT_ID:-rpi}"
+      ROBOCOTE_TENANT_SLUG: "${ROBOCOTE_TENANT_SLUG:-rpi}"
+      ROBOCOTE_TENANT_NAME: "${ROBOCOTE_TENANT_NAME:-Corretora Piloto RPI}"
       ROBOCOTE_QUOTE_BASE_URL: "${ROBOCOTE_QUOTE_BASE_URL:-https://rcdemo.robocote.com.br}"
 
       # Debug (desligar em produção real)

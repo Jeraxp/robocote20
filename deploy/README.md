@@ -64,7 +64,12 @@ No Portainer → Stacks → Add stack → Web editor:
 | `ROBOCOTE_IMAGE` | `robocote/robocote-2:0.1.0` (ou GHCR) |
 | `ROBOCOTE_HOST` | `rcdemo.robocote.com.br` |
 | `ROBOCOTE_QUOTE_BASE_URL` | `https://rcdemo.robocote.com.br` |
+| `DATABASE_URL` | Postgres do Robocote 2.0 com `db/schema.sql` aplicado |
+| `DATABASE_SSL` | `0` no swarm interno; `1` em banco gerenciado com SSL |
+| `ROBOCOTE_PANEL_TOKEN` | token forte para bloquear `/painel` e APIs admin |
 | `ROBOCOTE_TENANT_ID` | `rpi` |
+| `ROBOCOTE_TENANT_SLUG` | `rpi` |
+| `ROBOCOTE_TENANT_NAME` | nome da corretora-piloto |
 | `SEGFY_CLIENT_ID` | (do `.robocote/secrets.env`) |
 | `SEGFY_CLIENT_SECRET` | (do `.robocote/secrets.env`) |
 | `RPI_CORRETORA_TOKEN` | (do `.robocote/secrets.env`) |
@@ -75,6 +80,8 @@ No Portainer → Stacks → Add stack → Web editor:
 | `EVOLUTION_INSTANCE` | `Robocote2` |
 | `EVOLUTION_WEBHOOK_SECRET` | string aleatória ≥32 chars (gerar com `openssl rand -hex 32`) |
 | `ROBOCOTE_DEBUG_ROUTER` | `0` em produção, `1` enquanto valida |
+
+Sem `DATABASE_URL`, o painel sobe em modo memória: bom para smoke test, ruim para produção porque tenants, usuários e sessões somem ao reiniciar. Sem `ROBOCOTE_PANEL_TOKEN`, o alpha continua aberto para facilitar desenvolvimento local; em URL pública ele deve ficar preenchido.
 
 ### 4. Deploy
 

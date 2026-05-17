@@ -275,7 +275,7 @@ export const INITIAL_MESSAGES: ChatMessage[] = [
   {
     id: 'm-start-1',
     author: 'bot',
-    text: 'Olá, eu sou a Vivi da Robocote. Vou te ajudar a cotar seu seguro auto.',
+    text: 'Olá! Eu sou o Robocote, o seu corretor digital inteligente. Vou te ajudar a cotar seu seguro auto.',
   },
   {
     id: 'm-start-2',

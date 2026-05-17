@@ -11,6 +11,7 @@ const ROBOCOTE_ANALYST_MODEL = process.env.ROBOCOTE_ANALYST_MODEL?.trim() || 'gp
 
 const ACTIVE_STEPS = [
   'name',
+  'vehicle_plate',
   'vehicle_brand',
   'vehicle_year',
   'vehicle_model',
@@ -148,6 +149,7 @@ const CHOICES: Partial<Record<ActiveStepId, Choice[]>> = {
 
 const STEP_CONTEXT: Record<ActiveStepId, { title: string; prompt: string }> = {
   name: { title: 'Nome', prompt: 'Qual é seu nome completo?' },
+  vehicle_plate: { title: 'Placa', prompt: 'Tem a placa do carro à mão? Mandando a placa, eu acelero a cotação. Sem placa também funciona — é só dizer.' },
   vehicle_brand: { title: 'Marca', prompt: 'Qual é a marca do veículo?' },
   vehicle_year: { title: 'Ano', prompt: 'Qual o ano do veículo?' },
   vehicle_model: { title: 'Modelo', prompt: 'Qual modelo do veículo?' },

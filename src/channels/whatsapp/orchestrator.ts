@@ -18,6 +18,7 @@
 import { handleAutoF1AssistantMessage, type AssistantAction } from '../../assistant/autoF1.js';
 import { runAutoF1Quote, type AutoF1QuoteRequest } from '../../journey/autoF1.js';
 import { loadCatalogForStep } from '../../catalog/auto.js';
+import { decodePlate, pickPlateDecodeOutcome, isValidPlateFormat, normalizePlate } from '../../segfy/placa.js';
 import {
   sessionStore,
   createInitialSessionState,
@@ -110,6 +111,23 @@ function looksLikeDenial(message: string): boolean {
 
 const CALCULATE_IDEMPOTENCY_MS = 60_000;
 const PROGRESS_NUDGE_MS = 15_000;
+
+/** Lead avisa que não tem/quer mandar placa ("sem placa", "não tenho", "pular"). */
+function looksLikeNoPlateSkip(message: string): boolean {
+  const m = normalizeMsg(message);
+  if (!m) return false;
+  return /^(sem\s*placa|pular|skip|sem|nao\s*tenho|nao\s*sei|nao\s*lembro|nao\s*sei\s*ainda|nao\s*tenho\s*aqui|nao\s*tenho\s*comigo|nao|n)$/.test(m);
+}
+
+/** Extrai padrão de placa (Mercosul AAA1A23 ou antigo AAA1234) dentro de qualquer texto. */
+function extractPlateFromMessage(message: string): string | null {
+  const matches = message.match(/[A-Za-z]{3}[\s-]?[0-9][0-9A-Za-z][0-9]{2}/g);
+  if (!matches) return null;
+  for (const m of matches) {
+    if (isValidPlateFormat(m)) return normalizePlate(m);
+  }
+  return null;
+}
 
 function buildQuoteLink(guid: string): string {
   if (!ROBOCOTE_QUOTE_BASE_URL) return `/quote-room/${guid}`;
@@ -287,6 +305,98 @@ export async function processWhatsappTurn(
     session = await sessionStore.upsert({ ...session, pendingProposal: null });
   }
 
+  // ─── Step vehicle_plate: tenta decode automático via Segfy ───────────────────
+  // Se lead manda placa válida e decode retorna OK, preenchemos brand+year+model
+  // de uma vez e pulamos direto pra `usage` (poupa 3 turnos). Se manda skip
+  // ("sem placa", "não tenho"), cai pra vehicle_brand manual. Senão, handler IA.
+  if (session.stepId === 'vehicle_plate') {
+    const promotedStage = session.pipelineStage === 'novos_leads' ? 'contatados' : session.pipelineStage;
+
+    if (looksLikeNoPlateSkip(inbound.text)) {
+      const skipped: SessionState = {
+        ...session,
+        stepId: 'vehicle_brand',
+        recentMessages: [],
+        pendingProposal: null,
+        pipelineStage: promotedStage,
+      };
+      const reply = `Sem problema. ${STEP_PROMPT.vehicle_brand}`;
+      await sendWhatsappText(inbound.fromPhone, reply);
+      const persisted = await sessionStore.upsert(recordTurn(skipped, inbound, reply, 'skip_plate'));
+      return { replySent: reply, action: 'answer_step', sessionAfter: persisted };
+    }
+
+    const plate = extractPlateFromMessage(inbound.text);
+    if (plate) {
+      let outcomeOk = false;
+      try {
+        const resp = await decodePlate(plate);
+        const outcome = pickPlateDecodeOutcome(resp.body);
+        if (outcome.ok && outcome.brand && outcome.model && outcome.modelYear) {
+          outcomeOk = true;
+          const filled: SessionState = {
+            ...session,
+            answers: {
+              ...session.answers,
+              vehicle_plate: { id: 'vehicle_plate', label: 'Placa', value: plate, rawValue: plate },
+              vehicle_brand: {
+                id: 'vehicle_brand',
+                label: 'Marca',
+                value: outcome.brand.text,
+                rawValue: outcome.brand.id,
+                metadata: { brand_text: outcome.brand.text, brand_value: outcome.brand.value },
+              },
+              vehicle_year: {
+                id: 'vehicle_year',
+                label: 'Ano',
+                value: String(outcome.modelYear),
+                rawValue: String(outcome.modelYear),
+              },
+              vehicle_model: {
+                id: 'vehicle_model',
+                label: 'Modelo',
+                value: outcome.model.value,
+                rawValue: outcome.model.id,
+                metadata: {
+                  model_id: outcome.model.id,
+                  fipe_code: outcome.model.fipeCode,
+                  fipe_value: outcome.model.fipeValue,
+                  fuel_type: outcome.model.fuelType,
+                  model_text: outcome.model.text,
+                },
+              },
+            },
+            stepId: 'usage',
+            recentMessages: [],
+            pendingProposal: null,
+            pipelineStage: promotedStage,
+          };
+          const reply = `Anotei: ${outcome.brand.text} ${outcome.model.value} ${outcome.modelYear} 🚗\n\n${STEP_PROMPT.usage}`;
+          await sendWhatsappText(inbound.fromPhone, reply);
+          const persisted = await sessionStore.upsert(recordTurn(filled, inbound, reply, 'plate_decoded'));
+          return { replySent: reply, action: 'answer_step', sessionAfter: persisted };
+        }
+      } catch (e) {
+        console.warn(`decode-plate falhou: ${(e as Error).message}`);
+      }
+      if (!outcomeOk) {
+        // Placa válida em formato mas Segfy não achou (ou erro) → fallback manual
+        const fallback: SessionState = {
+          ...session,
+          stepId: 'vehicle_brand',
+          recentMessages: [],
+          pendingProposal: null,
+          pipelineStage: promotedStage,
+        };
+        const reply = `Não consegui achar pela placa. Sem problema — ${STEP_PROMPT.vehicle_brand}`;
+        await sendWhatsappText(inbound.fromPhone, reply);
+        const persisted = await sessionStore.upsert(recordTurn(fallback, inbound, reply, 'plate_decode_failed'));
+        return { replySent: reply, action: 'answer_step', sessionAfter: persisted };
+      }
+    }
+    // Mensagem não é placa nem skip — deixa o handler IA pedir clarification.
+  }
+
   // Step quote_link com confirmação direta → dispara cotação sem passar pelo modelo.
   if (session.stepId === 'quote_link' && isCalcConfirmation(inbound.text)) {
     // ─── P2 — Idempotência: se já calculou nos últimos 60s, reenvia o link existente ──
@@ -394,6 +504,7 @@ export async function processWhatsappTurn(
 
 const STEP_ORDER = [
   'name',
+  'vehicle_plate',
   'vehicle_brand',
   'vehicle_year',
   'vehicle_model',
@@ -422,6 +533,7 @@ function nextStepAfter(stepId: StepId): SessionState['stepId'] {
 /** Pergunta padrão da Robocotepra cada step — usado quando avançamos via confirmação direta. */
 const STEP_PROMPT: Record<StepId, string> = {
   name: 'Pra começar, qual é seu nome completo?',
+  vehicle_plate: 'Tem a placa do carro à mão? Mandando a placa, eu acelero a cotação. Sem placa também funciona — é só dizer.',
   vehicle_brand: 'Qual é a marca do veículo?',
   vehicle_year: 'Qual o ano do veículo?',
   vehicle_model: 'Qual modelo do veículo?',

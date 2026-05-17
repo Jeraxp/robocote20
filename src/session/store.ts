@@ -18,6 +18,7 @@ export type PipelineStage = 'novos_leads' | 'contatados' | 'em_negociacao' | 'se
 
 const ACTIVE_STEPS = [
   'name',
+  'vehicle_plate',
   'vehicle_brand',
   'vehicle_year',
   'vehicle_model',

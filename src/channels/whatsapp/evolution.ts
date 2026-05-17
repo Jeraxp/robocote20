@@ -215,6 +215,16 @@ function bodyNumber(body: Record<string, unknown>, key: string): number | undefi
   return typeof value === 'number' ? value : undefined;
 }
 
+function firstBodyString(...values: Array<Record<string, unknown>>): string | undefined {
+  for (const body of values) {
+    const value = bodyString(body, 'base64')
+      ?? bodyString(body, 'qrcode')
+      ?? bodyString(body, 'qrCode');
+    if (value) return value;
+  }
+  return undefined;
+}
+
 export async function createEvolutionInstance(input: EvolutionCreateInstanceInput): Promise<EvolutionCreateInstanceResult> {
   if (!isEvolutionConfigured()) {
     return { ok: false, status: 0, instanceName: input.instanceName, error: 'evolution_not_configured' };
@@ -265,13 +275,15 @@ export async function connectEvolutionInstance(instanceName: string): Promise<Ev
     });
     const body = await readEvolutionBody(response);
     const record = bodyRecord(body);
+    const qrcode = bodyRecord(record.qrcode);
+    const qrCode = bodyRecord(record.qrCode);
     return {
       ok: response.ok,
       status: response.status,
       instanceName,
       pairingCode: bodyString(record, 'pairingCode'),
-      code: bodyString(record, 'code'),
-      base64: bodyString(record, 'base64') ?? bodyString(record, 'qrcode'),
+      code: bodyString(record, 'code') ?? bodyString(qrcode, 'code') ?? bodyString(qrCode, 'code'),
+      base64: bodyString(record, 'base64') ?? bodyString(qrcode, 'base64') ?? bodyString(qrCode, 'base64') ?? firstBodyString(qrcode, qrCode),
       count: bodyNumber(record, 'count'),
       body,
       error: response.ok ? undefined : `evolution_http_${response.status}`,

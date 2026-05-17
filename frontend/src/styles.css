@@ -2122,6 +2122,101 @@ td {
   gap: 8px;
 }
 
+.admin-checkbox-field {
+  display: flex !important;
+  align-items: center;
+  gap: 10px !important;
+  min-height: 42px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+}
+
+.admin-checkbox-field input {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  accent-color: var(--blue);
+}
+
+.admin-table-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.admin-icon-button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--blue);
+}
+
+.admin-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.64;
+}
+
+.admin-icon-button:disabled svg {
+  animation: spin 0.9s linear infinite;
+}
+
+.whatsapp-qr-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  border-radius: 12px;
+  padding: 18px;
+}
+
+.whatsapp-qr-card span {
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.whatsapp-qr-card h2 {
+  margin: 4px 0 6px;
+  font-size: 22px;
+}
+
+.whatsapp-qr-card p {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.whatsapp-qr-card strong {
+  display: inline-flex;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f5fbff;
+  color: var(--ink);
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.whatsapp-qr-card img {
+  width: 162px;
+  height: 162px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  object-fit: contain;
+}
+
+.whatsapp-qr-card > svg {
+  color: var(--blue);
+}
+
 .admin-placeholder {
   display: grid;
   place-items: center;

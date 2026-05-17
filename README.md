@@ -57,8 +57,9 @@ npm run dev:web
 | `GET /api/cotacoes/:guid/resumo` | DTO seguro para o Robocote Quote Room |
 | `GET /api/admin/me` | Contexto alpha de usuário, role, tenant e navegação |
 | `GET /api/admin/tenants` | Lista corretoras (SUPERADMIN) |
-| `POST /api/admin/tenants` | Cria corretora/tenant e gestor ADMIN (SUPERADMIN) |
+| `POST /api/admin/tenants` | Cria corretora/tenant, gestor ADMIN e instância WhatsApp inicial (SUPERADMIN) |
 | `GET /api/admin/users` | Lista usuários do escopo permitido (SUPERADMIN/ADMIN) |
+| `POST /api/admin/users` | Cria gestor/operador; ADMIN só cria OPERADOR no próprio tenant |
 | `GET /api/admin/whatsapp-instances` | Lista instâncias WhatsApp por corretora |
 | `POST /api/admin/whatsapp-instances` | Registra/cria instância Evolution para uma corretora |
 | `POST /api/admin/whatsapp-instances/:instanceName/connect` | Busca QR/pairing code na Evolution API |
@@ -131,17 +132,29 @@ Email do gestor
 WhatsApp do gestor
 ```
 
-O sistema gera `tenant_id`/`slug`, cria o usuário gestor como `ADMIN` e amarra a membership no tenant. Documento e telefones voltam mascarados na API.
+O sistema gera `tenant_id`/`slug`, cria o usuário gestor como `ADMIN`, amarra a membership no tenant e, por padrão, já registra uma instância WhatsApp `robocote-{tenant_id}` para a corretora. Documento e telefones voltam mascarados na API.
+
+Criação de operadores pelo gestor:
+
+```text
+Nome
+Email
+WhatsApp
+Perfil OPERADOR
+```
+
+SUPERADMIN pode criar `ADMIN` ou `OPERADOR` em qualquer corretora. ADMIN cria apenas `OPERADOR` no próprio tenant.
 
 ## WhatsApp via Evolution dentro do Robocote
 
 A fundação de backend para onboarding por QR já existe:
 
-1. `POST /api/admin/whatsapp-instances` registra uma instância para a corretora e pode chamar a Evolution para criar a instância.
-2. `POST /api/admin/whatsapp-instances/:instanceName/connect` chama `GET /instance/connect/{instance}` na Evolution e devolve `pairingCode`, `code` e `base64/qrcode` quando a versão retornar.
-3. `GET /api/admin/whatsapp-instances/:instanceName/state` consulta `GET /instance/connectionState/{instance}`.
+1. `POST /api/admin/tenants` já pode provisionar a primeira instância WhatsApp da corretora.
+2. `POST /api/admin/whatsapp-instances` registra uma instância manual e pode chamar a Evolution para criá-la.
+3. `POST /api/admin/whatsapp-instances/:instanceName/connect` chama `GET /instance/connect/{instance}` na Evolution e devolve `pairingCode`, `code` e `base64/qrcode` quando a versão retornar.
+4. `GET /api/admin/whatsapp-instances/:instanceName/state` consulta `GET /instance/connectionState/{instance}`.
 
-Próximo passo visual: habilitar o botão "Conectar número" na tela WhatsApp, mostrar QR/pairing code e atualizar estado por polling ou evento `CONNECTION_UPDATE`/`QRCODE_UPDATED`.
+A tela WhatsApp já permite criar conexão, gerar QR Code/pairing code e atualizar estado.
 
 ## IA e RAG
 

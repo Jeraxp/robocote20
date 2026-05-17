@@ -192,11 +192,32 @@ function normalizeDocument(value: unknown, type: 'cpf' | 'cnpj'): string {
   return digits.length === expected ? digits : '';
 }
 
+function normalizeTenantUserRole(value: unknown): 'admin' | 'operador' {
+  return value === 'admin' ? 'admin' : 'operador';
+}
+
 function normalizeEmail(value: unknown): string {
   if (typeof value !== 'string') return '';
   const email = value.trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return '';
   return email.slice(0, 180);
+}
+
+function whatsappInstanceNameForTenant(tenantId: string): string {
+  return `robocote-${tenantId}`
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+}
+
+function evolutionStateToWhatsappStatus(state: string | undefined): 'connected' | 'connecting' | 'disconnected' | 'logged_out' | 'created' {
+  const normalized = state?.trim().toLowerCase() ?? '';
+  if (normalized.includes('connecting') || normalized.includes('pairing')) return 'connecting';
+  if (normalized.includes('open') || normalized.includes('connect')) return 'connected';
+  if (normalized.includes('logout') || normalized.includes('logged')) return 'logged_out';
+  if (normalized.includes('close') || normalized.includes('disconnect')) return 'disconnected';
+  return 'created';
 }
 
 function manualAnswer(id: string, label: string, value: string): SessionAnswer {
@@ -475,6 +496,7 @@ api.post('/admin/tenants', async (c) => {
     managerName?: string;
     managerEmail?: string;
     managerWhatsapp?: string;
+    createWhatsapp?: boolean;
   } | null;
 
   const documentType = normalizeDocumentType(body?.documentType);
@@ -506,7 +528,27 @@ api.post('/admin/tenants', async (c) => {
       managerEmail,
       managerWhatsapp,
     });
-    return c.json({ ok: true, ...result }, 201);
+
+    let whatsapp: {
+      instance: Awaited<ReturnType<typeof adminStore.createWhatsappInstance>>;
+      evolution: Awaited<ReturnType<typeof createEvolutionInstance>> | null;
+    } | null = null;
+    if (body?.createWhatsapp !== false) {
+      const instanceName = whatsappInstanceNameForTenant(result.tenant.id);
+      const evolution = await createEvolutionInstance({
+        instanceName,
+        ownerPhone: brokerPhone,
+      });
+      const instance = await adminStore.createWhatsappInstance({
+        tenantId: result.tenant.id,
+        evolutionInstanceName: instanceName,
+        ownerPhone: brokerPhone,
+        status: evolution.ok ? 'created' : 'error',
+      });
+      whatsapp = { instance, evolution };
+    }
+
+    return c.json({ ok: true, ...result, whatsapp }, 201);
   } catch (e) {
     return c.json({ ok: false, error: (e as Error).message }, 409);
   }
@@ -522,6 +564,55 @@ api.get('/admin/users', async (c) => {
   }
   const tenantId = c.req.query('tenantId') || auth.tenantId || undefined;
   return c.json({ ok: true, users: await adminStore.listUsers(auth, tenantId) });
+});
+
+api.post('/admin/users', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const auth = resolveAuthContext(c);
+  if (!canManageUsers(auth)) {
+    return c.json({ ok: false, error: 'usuário sem permissão para gerenciar usuários' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => null) as {
+    tenantId?: string;
+    name?: string;
+    email?: string;
+    phone?: string;
+    role?: string;
+  } | null;
+
+  const tenantId = auth.isSuperadmin
+    ? cleanText(body?.tenantId, 80)
+    : writableTenantId(auth, body?.tenantId);
+  const role = normalizeTenantUserRole(body?.role);
+  const name = cleanText(body?.name, 120);
+  const email = normalizeEmail(body?.email);
+  const phone = typeof body?.phone === 'string' && body.phone.trim()
+    ? normalizeManualPhone(body.phone)
+    : '';
+
+  if (!tenantId) return c.json({ ok: false, error: 'tenant da corretora é obrigatório' }, 400);
+  if (!name) return c.json({ ok: false, error: 'nome do usuário é obrigatório' }, 400);
+  if (!email) return c.json({ ok: false, error: 'email válido é obrigatório' }, 400);
+  if (body?.phone && !phone) return c.json({ ok: false, error: 'telefone válido é obrigatório' }, 400);
+  if (!auth.isSuperadmin && role !== 'operador') {
+    return c.json({ ok: false, error: 'gestor só pode cadastrar operadores' }, 403);
+  }
+
+  try {
+    const user = await adminStore.createUser(auth, {
+      tenantId,
+      name,
+      email,
+      phone: phone || undefined,
+      role,
+    });
+    return c.json({ ok: true, user }, 201);
+  } catch (e) {
+    return c.json({ ok: false, error: (e as Error).message }, 409);
+  }
 });
 
 api.get('/admin/whatsapp-instances', async (c) => {
@@ -589,9 +680,14 @@ api.post('/admin/whatsapp-instances/:instanceName/connect', async (c) => {
   }
   const result = await connectEvolutionInstance(instanceName);
   if (!result.ok) {
+    await adminStore.updateWhatsappInstance(instanceName, { status: 'error' });
     return c.json({ ok: false, error: result.error, evolution: result }, 502);
   }
-  return c.json({ ok: true, qr: result });
+  const instance = await adminStore.updateWhatsappInstance(instanceName, {
+    status: 'qrcode',
+    lastQrAt: new Date().toISOString(),
+  });
+  return c.json({ ok: true, qr: result, instance });
 });
 
 api.get('/admin/whatsapp-instances/:instanceName/state', async (c) => {
@@ -609,9 +705,17 @@ api.get('/admin/whatsapp-instances/:instanceName/state', async (c) => {
   }
   const result = await getEvolutionConnectionState(instanceName);
   if (!result.ok) {
+    await adminStore.updateWhatsappInstance(instanceName, { status: 'error' });
     return c.json({ ok: false, error: result.error, evolution: result }, 502);
   }
-  return c.json({ ok: true, state: result });
+  const status = evolutionStateToWhatsappStatus(result.state);
+  const instance = await adminStore.updateWhatsappInstance(instanceName, {
+    status,
+    lastConnectionState: result.state ?? null,
+    connectedAt: status === 'connected' ? new Date().toISOString() : undefined,
+    disconnectedAt: status === 'disconnected' || status === 'logged_out' ? new Date().toISOString() : undefined,
+  });
+  return c.json({ ok: true, state: result, instance });
 });
 
 api.get('/cotacoes/:guid/resumo', async (c) => {

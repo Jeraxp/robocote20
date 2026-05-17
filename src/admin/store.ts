@@ -44,6 +44,14 @@ export interface CreateTenantResult {
   manager: UserRecord;
 }
 
+export interface CreateUserInput {
+  tenantId: string;
+  name: string;
+  email: string;
+  phone?: string;
+  role: 'admin' | 'operador';
+}
+
 export interface WhatsappInstanceRecord {
   id: string;
   tenantId: string;
@@ -61,13 +69,22 @@ export interface WhatsappInstanceRecord {
 export interface AdminStore {
   listTenants(auth: AuthContext): Promise<TenantRecord[]>;
   listUsers(auth: AuthContext, tenantId?: string): Promise<UserRecord[]>;
+  createUser(auth: AuthContext, input: CreateUserInput): Promise<UserRecord>;
   createTenantWithManager(input: CreateTenantInput): Promise<CreateTenantResult>;
   listWhatsappInstances(auth: AuthContext, tenantId?: string): Promise<WhatsappInstanceRecord[]>;
   createWhatsappInstance(input: {
     tenantId: string;
     evolutionInstanceName: string;
     ownerPhone?: string;
+    status?: WhatsappInstanceRecord['status'];
   }): Promise<WhatsappInstanceRecord>;
+  updateWhatsappInstance(instanceName: string, patch: {
+    status?: WhatsappInstanceRecord['status'];
+    lastConnectionState?: string | null;
+    lastQrAt?: string | null;
+    connectedAt?: string | null;
+    disconnectedAt?: string | null;
+  }): Promise<WhatsappInstanceRecord | null>;
 }
 
 function digitsOnly(value: string): string {
@@ -186,6 +203,9 @@ class InMemoryAdminStore implements AdminStore {
     const scopedTenants = auth.isSuperadmin && !tenantId
       ? this.tenants
       : this.tenants.filter((tenant) => tenant.id === (tenantId ?? auth.tenantId));
+    const scopedTenantIds = new Set(scopedTenants.map((tenant) => tenant.id));
+    const storedUsers = [...this.users.values()].filter((user) => !user.tenantId || scopedTenantIds.has(user.tenantId));
+    const storedAdminTenantIds = new Set(storedUsers.filter((user) => user.role === 'admin' && user.tenantId).map((user) => user.tenantId));
     const users: UserRecord[] = [
       {
         id: 'taskdun-superadmin',
@@ -198,7 +218,9 @@ class InMemoryAdminStore implements AdminStore {
         createdAt: now,
         updatedAt: now,
       },
-      ...scopedTenants.map((tenant): UserRecord => ({
+      ...scopedTenants
+        .filter((tenant) => !storedAdminTenantIds.has(tenant.id))
+        .map((tenant): UserRecord => ({
         id: `${tenant.id}-admin`,
         name: tenant.managerName ?? 'Gestor da Corretora',
         email: tenant.managerEmail ?? `gestor@${tenant.id}.local`,
@@ -209,9 +231,38 @@ class InMemoryAdminStore implements AdminStore {
         createdAt: now,
         updatedAt: now,
       })),
+      ...storedUsers,
     ];
     if (auth.isSuperadmin) return users;
     return users.filter((user) => user.tenantId === auth.tenantId);
+  }
+
+  async createUser(auth: AuthContext, input: CreateUserInput): Promise<UserRecord> {
+    if (!auth.isSuperadmin && auth.tenantId !== input.tenantId) {
+      throw new Error('tenant fora do escopo do usuário');
+    }
+    if (!auth.isSuperadmin && input.role !== 'operador') {
+      throw new Error('gestor só pode cadastrar operadores');
+    }
+    if (!this.tenants.some((tenant) => tenant.id === input.tenantId)) {
+      throw new Error('corretora não encontrada');
+    }
+
+    const now = new Date().toISOString();
+    const existing = [...this.users.values()].find((user) => user.email === input.email && user.tenantId === input.tenantId);
+    const user: UserRecord = {
+      id: existing?.id ?? userIdFromEmail(input.email),
+      name: input.name,
+      email: input.email,
+      phoneMasked: maskPhone(input.phone),
+      status: existing?.status === 'disabled' ? 'invited' : existing?.status ?? 'invited',
+      role: input.role,
+      tenantId: input.tenantId,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    this.users.set(user.id, user);
+    return user;
   }
 
   async createTenantWithManager(input: CreateTenantInput): Promise<CreateTenantResult> {
@@ -265,14 +316,18 @@ class InMemoryAdminStore implements AdminStore {
     tenantId: string;
     evolutionInstanceName: string;
     ownerPhone?: string;
+    status?: WhatsappInstanceRecord['status'];
   }): Promise<WhatsappInstanceRecord> {
     const now = new Date().toISOString();
+    const existing = [...this.whatsapp.values()].find((item) => item.evolutionInstanceName === input.evolutionInstanceName);
+    if (existing) return existing;
+
     const record: WhatsappInstanceRecord = {
       id: randomUUID(),
       tenantId: input.tenantId,
       evolutionInstanceName: input.evolutionInstanceName,
       ownerPhone: input.ownerPhone || null,
-      status: 'created',
+      status: input.status ?? 'created',
       lastConnectionState: null,
       lastQrAt: null,
       connectedAt: null,
@@ -282,6 +337,28 @@ class InMemoryAdminStore implements AdminStore {
     };
     this.whatsapp.set(record.id, record);
     return record;
+  }
+
+  async updateWhatsappInstance(instanceName: string, patch: {
+    status?: WhatsappInstanceRecord['status'];
+    lastConnectionState?: string | null;
+    lastQrAt?: string | null;
+    connectedAt?: string | null;
+    disconnectedAt?: string | null;
+  }): Promise<WhatsappInstanceRecord | null> {
+    const current = [...this.whatsapp.values()].find((item) => item.evolutionInstanceName === instanceName);
+    if (!current) return null;
+    const next: WhatsappInstanceRecord = {
+      ...current,
+      status: patch.status ?? current.status,
+      lastConnectionState: patch.lastConnectionState !== undefined ? patch.lastConnectionState : current.lastConnectionState,
+      lastQrAt: patch.lastQrAt !== undefined ? patch.lastQrAt : current.lastQrAt,
+      connectedAt: patch.connectedAt !== undefined ? patch.connectedAt : current.connectedAt,
+      disconnectedAt: patch.disconnectedAt !== undefined ? patch.disconnectedAt : current.disconnectedAt,
+      updatedAt: new Date().toISOString(),
+    };
+    this.whatsapp.set(next.id, next);
+    return next;
   }
 }
 
@@ -337,6 +414,60 @@ class PostgresAdminStore implements AdminStore {
     return result.rows.map(rowUser);
   }
 
+  async createUser(auth: AuthContext, input: CreateUserInput): Promise<UserRecord> {
+    if (!auth.isSuperadmin && auth.tenantId !== input.tenantId) {
+      throw new Error('tenant fora do escopo do usuário');
+    }
+    if (!auth.isSuperadmin && input.role !== 'operador') {
+      throw new Error('gestor só pode cadastrar operadores');
+    }
+
+    const pool = getPostgresPool();
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+
+      const tenantCheck = await client.query('select 1 from tenants where id = $1 limit 1', [input.tenantId]);
+      if (!tenantCheck.rowCount) throw new Error('corretora não encontrada');
+
+      const userId = userIdFromEmail(input.email);
+      const userResult = await client.query(`
+        insert into users (id, name, email, phone, status)
+        values ($1, $2, $3, $4, 'invited')
+        on conflict (email) do update set
+          name = excluded.name,
+          phone = excluded.phone,
+          status = case when users.status = 'disabled' then 'invited' else users.status end,
+          updated_at = now()
+        returning *
+      `, [userId, input.name, input.email, digitsOnly(input.phone ?? '') || null]);
+
+      const createdId = String(userResult.rows[0].id);
+      await client.query(`
+        insert into tenant_memberships (user_id, tenant_id, role)
+        values ($1, $2, $3)
+        on conflict (user_id, tenant_id) do update set role = excluded.role
+      `, [createdId, input.tenantId, input.role]);
+
+      await client.query(`
+        insert into audit_events (tenant_id, actor_user_id, action, entity_type, entity_id, metadata)
+        values ($1, $2, 'user.invite', 'user', $3, $4::jsonb)
+      `, [input.tenantId, auth.userId, createdId, JSON.stringify({ role: input.role, email: input.email })]);
+
+      await client.query('commit');
+      return rowUser({
+        ...userResult.rows[0],
+        role: input.role,
+        tenant_id: input.tenantId,
+      });
+    } catch (e) {
+      await client.query('rollback');
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
   async listWhatsappInstances(auth: AuthContext, tenantId?: string): Promise<WhatsappInstanceRecord[]> {
     const pool = getPostgresPool();
     const target = tenantId ?? auth.tenantId;
@@ -350,14 +481,55 @@ class PostgresAdminStore implements AdminStore {
     tenantId: string;
     evolutionInstanceName: string;
     ownerPhone?: string;
+    status?: WhatsappInstanceRecord['status'];
   }): Promise<WhatsappInstanceRecord> {
     const pool = getPostgresPool();
     const result = await pool.query(`
       insert into whatsapp_instances (id, tenant_id, evolution_instance_name, owner_phone, status)
-      values ($1, $2, $3, $4, 'created')
+      values ($1, $2, $3, $4, $5)
+      on conflict (evolution_instance_name) do update set
+        owner_phone = coalesce(excluded.owner_phone, whatsapp_instances.owner_phone),
+        status = case
+          when whatsapp_instances.status = 'connected' then whatsapp_instances.status
+          else excluded.status
+        end,
+        updated_at = now()
       returning *
-    `, [randomUUID(), input.tenantId, input.evolutionInstanceName, input.ownerPhone || null]);
+    `, [randomUUID(), input.tenantId, input.evolutionInstanceName, input.ownerPhone || null, input.status ?? 'created']);
     return rowWhatsapp(result.rows[0]);
+  }
+
+  async updateWhatsappInstance(instanceName: string, patch: {
+    status?: WhatsappInstanceRecord['status'];
+    lastConnectionState?: string | null;
+    lastQrAt?: string | null;
+    connectedAt?: string | null;
+    disconnectedAt?: string | null;
+  }): Promise<WhatsappInstanceRecord | null> {
+    const pool = getPostgresPool();
+    const result = await pool.query(`
+      update whatsapp_instances set
+        status = coalesce($2, status),
+        last_connection_state = case when $3::boolean then $4 else last_connection_state end,
+        last_qr_at = case when $5::boolean then $6::timestamptz else last_qr_at end,
+        connected_at = case when $7::boolean then $8::timestamptz else connected_at end,
+        disconnected_at = case when $9::boolean then $10::timestamptz else disconnected_at end,
+        updated_at = now()
+      where evolution_instance_name = $1
+      returning *
+    `, [
+      instanceName,
+      patch.status ?? null,
+      patch.lastConnectionState !== undefined,
+      patch.lastConnectionState ?? null,
+      patch.lastQrAt !== undefined,
+      patch.lastQrAt ?? null,
+      patch.connectedAt !== undefined,
+      patch.connectedAt ?? null,
+      patch.disconnectedAt !== undefined,
+      patch.disconnectedAt ?? null,
+    ]);
+    return result.rows[0] ? rowWhatsapp(result.rows[0]) : null;
   }
 
   async createTenantWithManager(input: CreateTenantInput): Promise<CreateTenantResult> {

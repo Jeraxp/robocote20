@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   MessageCircle,
   Plus,
+  QrCode,
   RefreshCw,
   Save,
   Search,
@@ -102,6 +103,7 @@ interface AdminUser {
   id: string;
   name: string;
   email: string;
+  phoneMasked: string | null;
   status: string;
   role: PanelAuth['role'];
   tenantId: string | null;
@@ -114,7 +116,18 @@ interface AdminWhatsappInstance {
   ownerPhone: string | null;
   status: string;
   lastConnectionState: string | null;
+  lastQrAt: string | null;
   connectedAt: string | null;
+}
+
+interface EvolutionQrResult {
+  ok: boolean;
+  status: number;
+  instanceName: string;
+  pairingCode?: string;
+  code?: string;
+  base64?: string;
+  count?: number;
 }
 
 interface AdminMeResponse {
@@ -145,6 +158,22 @@ interface TenantForm {
   managerName: string;
   managerEmail: string;
   managerWhatsapp: string;
+  createWhatsapp: boolean;
+}
+
+interface UserForm {
+  tenantId: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: 'admin' | 'operador';
+}
+
+interface WhatsappForm {
+  tenantId: string;
+  instanceName: string;
+  ownerPhone: string;
+  createInEvolution: boolean;
 }
 
 type PanelSection = 'leads' | 'tenants' | 'users' | 'whatsapp' | 'settings' | 'support';
@@ -266,20 +295,54 @@ async function fetchAdminTenants(token: string): Promise<AdminTenant[]> {
   return body.tenants;
 }
 
-async function createAdminTenant(input: TenantForm, token: string): Promise<AdminTenant> {
+async function createAdminTenant(input: TenantForm, token: string): Promise<{ tenant: AdminTenant; whatsapp?: { instance: AdminWhatsappInstance; evolution: { ok: boolean; error?: string } | null } }> {
   const response = await panelFetch('/api/admin/tenants', token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   });
-  const body = await parsePanelResponse<{ ok: true; tenant: AdminTenant }>(response, 'Não foi possível criar a corretora.');
-  return body.tenant;
+  const body = await parsePanelResponse<{ ok: true; tenant: AdminTenant; whatsapp?: { instance: AdminWhatsappInstance; evolution: { ok: boolean; error?: string } | null } }>(response, 'Não foi possível criar a corretora.');
+  return { tenant: body.tenant, whatsapp: body.whatsapp };
+}
+
+async function createAdminUser(input: UserForm, token: string): Promise<AdminUser> {
+  const response = await panelFetch('/api/admin/users', token, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const body = await parsePanelResponse<{ ok: true; user: AdminUser }>(response, 'Não foi possível criar usuário.');
+  return body.user;
 }
 
 async function fetchWhatsappInstances(token: string): Promise<AdminWhatsappInstance[]> {
   const response = await panelFetch('/api/admin/whatsapp-instances', token);
   const body = await parsePanelResponse<{ ok: true; instances: AdminWhatsappInstance[] }>(response, 'Não foi possível carregar WhatsApp.');
   return body.instances;
+}
+
+async function createWhatsappInstance(input: WhatsappForm, token: string): Promise<AdminWhatsappInstance> {
+  const response = await panelFetch('/api/admin/whatsapp-instances', token, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const body = await parsePanelResponse<{ ok: true; instance: AdminWhatsappInstance }>(response, 'Não foi possível criar instância WhatsApp.');
+  return body.instance;
+}
+
+async function connectWhatsappInstance(instanceName: string, token: string): Promise<{ qr: EvolutionQrResult; instance: AdminWhatsappInstance | null }> {
+  const response = await panelFetch(`/api/admin/whatsapp-instances/${encodeURIComponent(instanceName)}/connect`, token, {
+    method: 'POST',
+  });
+  const body = await parsePanelResponse<{ ok: true; qr: EvolutionQrResult; instance: AdminWhatsappInstance | null }>(response, 'Não foi possível gerar QR Code.');
+  return { qr: body.qr, instance: body.instance };
+}
+
+async function refreshWhatsappState(instanceName: string, token: string): Promise<AdminWhatsappInstance | null> {
+  const response = await panelFetch(`/api/admin/whatsapp-instances/${encodeURIComponent(instanceName)}/state`, token);
+  const body = await parsePanelResponse<{ ok: true; instance: AdminWhatsappInstance | null }>(response, 'Não foi possível consultar estado.');
+  return body.instance;
 }
 
 function StatusPill({ status }: { status: PanelLead['status'] }): JSX.Element {
@@ -734,16 +797,33 @@ function PanelSidebar({
 }
 
 function UsersSection({
+  admin,
+  tenants,
+  values,
   users,
   loading,
+  saving,
   error,
+  onChange,
+  onSubmit,
   onRefresh,
 }: {
+  admin: AdminMeResponse | null;
+  tenants: AdminTenant[];
+  values: UserForm;
   users: AdminUser[];
   loading: boolean;
+  saving: boolean;
   error: string | null;
+  onChange: (values: UserForm) => void;
+  onSubmit: () => void;
   onRefresh: () => void;
 }): JSX.Element {
+  const isSuperadmin = admin?.auth.isSuperadmin ?? false;
+  const update = (key: keyof UserForm, value: string): void => {
+    onChange({ ...values, [key]: value });
+  };
+
   return (
     <section className="panel-section-page">
       <header className="panel-hero compact">
@@ -757,6 +837,84 @@ function UsersSection({
         </button>
       </header>
 
+      <section className="panel-surface admin-create-card">
+        <div className="admin-card-header">
+          <div>
+            <strong>Novo usuário</strong>
+            <span>{isSuperadmin ? 'Crie gestores ou operadores por corretora.' : 'Gestor cadastra operadores da própria corretora.'}</span>
+          </div>
+        </div>
+        <form
+          className="admin-create-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSubmit();
+          }}
+        >
+          {isSuperadmin ? (
+            <label>
+              Corretora
+              <select value={values.tenantId} onChange={(event) => update('tenantId', event.target.value)} required>
+                <option value="">Selecione</option>
+                {tenants.map((tenant) => (
+                  <option key={tenant.id} value={tenant.id}>
+                    {tenant.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
+          <label>
+            Nome
+            <input
+              value={values.name}
+              onChange={(event) => update('name', event.target.value)}
+              placeholder="Nome completo"
+              required
+            />
+          </label>
+
+          <label>
+            Email
+            <input
+              value={values.email}
+              onChange={(event) => update('email', event.target.value)}
+              placeholder="operador@corretora.com.br"
+              type="email"
+              required
+            />
+          </label>
+
+          <label>
+            WhatsApp
+            <input
+              value={values.phone}
+              onChange={(event) => update('phone', event.target.value)}
+              placeholder="(11) 99999-9999"
+              inputMode="tel"
+            />
+          </label>
+
+          <label>
+            Perfil
+            <select value={values.role} onChange={(event) => update('role', event.target.value)} disabled={!isSuperadmin}>
+              {isSuperadmin ? <option value="admin">ADMIN</option> : null}
+              <option value="operador">OPERADOR</option>
+            </select>
+          </label>
+
+          {error ? <p className="manual-lead-error">{error}</p> : null}
+
+          <div className="manual-lead-actions">
+            <button type="submit" className="panel-refresh" disabled={saving}>
+              {saving ? <RefreshCw size={17} /> : <Save size={17} />}
+              Criar usuário
+            </button>
+          </div>
+        </form>
+      </section>
+
       <div className="panel-surface admin-table-card">
         {error ? <p className="admin-empty">{error}</p> : null}
         <table className="admin-table">
@@ -764,6 +922,7 @@ function UsersSection({
             <tr>
               <th>Nome</th>
               <th>Email</th>
+              <th>WhatsApp</th>
               <th>Perfil</th>
               <th>Tenant</th>
               <th>Status</th>
@@ -774,6 +933,7 @@ function UsersSection({
               <tr key={`${user.tenantId ?? 'global'}-${user.id}`}>
                 <td>{user.name}</td>
                 <td>{user.email}</td>
+                <td>{user.phoneMasked ?? 'Não informado'}</td>
                 <td>{roleLabel(user.role)}</td>
                 <td>{user.tenantId ?? 'Taskdun'}</td>
                 <td>{user.status}</td>
@@ -906,6 +1066,15 @@ function TenantsSection({
             />
           </label>
 
+          <label className="admin-checkbox-field">
+            <input
+              type="checkbox"
+              checked={values.createWhatsapp}
+              onChange={(event) => onChange({ ...values, createWhatsapp: event.target.checked })}
+            />
+            Criar instância WhatsApp
+          </label>
+
           {error ? <p className="manual-lead-error">{error}</p> : null}
 
           <div className="manual-lead-actions">
@@ -958,28 +1127,139 @@ function TenantsSection({
 }
 
 function WhatsappSection({
+  admin,
+  tenants,
+  values,
   instances,
   loading,
+  saving,
+  connectingName,
+  selectedQr,
   error,
+  onChange,
+  onSubmit,
+  onConnect,
+  onState,
   onRefresh,
 }: {
+  admin: AdminMeResponse | null;
+  tenants: AdminTenant[];
+  values: WhatsappForm;
   instances: AdminWhatsappInstance[];
   loading: boolean;
+  saving: boolean;
+  connectingName: string | null;
+  selectedQr: { instanceName: string; qr: EvolutionQrResult } | null;
   error: string | null;
+  onChange: (values: WhatsappForm) => void;
+  onSubmit: () => void;
+  onConnect: (instanceName: string) => void;
+  onState: (instanceName: string) => void;
   onRefresh: () => void;
 }): JSX.Element {
+  const isSuperadmin = admin?.auth.isSuperadmin ?? false;
+  const update = (key: keyof WhatsappForm, value: string | boolean): void => {
+    onChange({ ...values, [key]: value });
+  };
+  const qrSrc = selectedQr?.qr.base64?.startsWith('data:')
+    ? selectedQr.qr.base64
+    : selectedQr?.qr.base64
+      ? `data:image/png;base64,${selectedQr.qr.base64}`
+      : null;
+
   return (
     <section className="panel-section-page">
       <header className="panel-hero compact">
         <div>
           <h1>WhatsApp</h1>
-          <p>Conexões Evolution API por corretora. O QR Code entra aqui no próximo passo.</p>
+          <p>Conexões Evolution API por corretora, com QR Code gerado dentro do Robocote.</p>
         </div>
-        <button type="button" className="panel-add-lead" disabled>
-          <Plus size={17} />
-          Conectar número
+        <button type="button" className="panel-refresh" onClick={onRefresh} disabled={loading}>
+          <RefreshCw size={17} />
+          Atualizar
         </button>
       </header>
+
+      <section className="panel-surface admin-create-card">
+        <div className="admin-card-header">
+          <div>
+            <strong>Nova conexão</strong>
+            <span>Use para criar uma instância manual ou refazer onboarding de uma corretora.</span>
+          </div>
+        </div>
+        <form
+          className="admin-create-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSubmit();
+          }}
+        >
+          {isSuperadmin ? (
+            <label>
+              Corretora
+              <select value={values.tenantId} onChange={(event) => update('tenantId', event.target.value)} required>
+                <option value="">Selecione</option>
+                {tenants.map((tenant) => (
+                  <option key={tenant.id} value={tenant.id}>
+                    {tenant.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
+          <label>
+            Instância
+            <input
+              value={values.instanceName}
+              onChange={(event) => update('instanceName', event.target.value)}
+              placeholder="Ex.: robocote-protecta"
+            />
+          </label>
+
+          <label>
+            Telefone dono
+            <input
+              value={values.ownerPhone}
+              onChange={(event) => update('ownerPhone', event.target.value)}
+              placeholder="(11) 99999-9999"
+              inputMode="tel"
+            />
+          </label>
+
+          <label className="admin-checkbox-field">
+            <input
+              type="checkbox"
+              checked={values.createInEvolution}
+              onChange={(event) => update('createInEvolution', event.target.checked)}
+            />
+            Criar também na Evolution
+          </label>
+
+          {error ? <p className="manual-lead-error">{error}</p> : null}
+
+          <div className="manual-lead-actions">
+            <button type="submit" className="panel-refresh" disabled={saving}>
+              {saving ? <RefreshCw size={17} /> : <Plus size={17} />}
+              Criar conexão
+            </button>
+          </div>
+        </form>
+      </section>
+
+      {selectedQr ? (
+        <section className="panel-surface whatsapp-qr-card">
+          <div>
+            <span>QR Code</span>
+            <h2>{selectedQr.instanceName}</h2>
+            <p>Escaneie no WhatsApp do cliente para conectar a instância.</p>
+            {selectedQr.qr.pairingCode || selectedQr.qr.code ? (
+              <strong>{selectedQr.qr.pairingCode ?? selectedQr.qr.code}</strong>
+            ) : null}
+          </div>
+          {qrSrc ? <img src={qrSrc} alt={`QR Code ${selectedQr.instanceName}`} /> : <QrCode size={86} />}
+        </section>
+      ) : null}
 
       <div className="panel-surface admin-table-card">
         <div className="admin-card-header">
@@ -987,12 +1267,7 @@ function WhatsappSection({
             <strong>Instâncias</strong>
             <span>{loading ? 'Carregando...' : `${instances.length} cadastrada(s)`}</span>
           </div>
-          <button type="button" className="panel-refresh" onClick={onRefresh} disabled={loading}>
-            <RefreshCw size={17} />
-            Atualizar
-          </button>
         </div>
-        {error ? <p className="admin-empty">{error}</p> : null}
         <table className="admin-table">
           <thead>
             <tr>
@@ -1001,6 +1276,7 @@ function WhatsappSection({
               <th>Status</th>
               <th>Estado</th>
               <th>Tenant</th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody>
@@ -1011,6 +1287,28 @@ function WhatsappSection({
                 <td>{item.status}</td>
                 <td>{item.lastConnectionState ?? 'Sem leitura'}</td>
                 <td>{item.tenantId}</td>
+                <td>
+                  <div className="admin-table-actions">
+                    <button
+                      type="button"
+                      className="admin-icon-button"
+                      onClick={() => onConnect(item.evolutionInstanceName)}
+                      disabled={connectingName === item.evolutionInstanceName}
+                      title="Gerar QR Code"
+                    >
+                      {connectingName === item.evolutionInstanceName ? <RefreshCw size={15} /> : <QrCode size={15} />}
+                    </button>
+                    <button
+                      type="button"
+                      className="admin-icon-button"
+                      onClick={() => onState(item.evolutionInstanceName)}
+                      disabled={connectingName === item.evolutionInstanceName}
+                      title="Atualizar estado"
+                    >
+                      <RefreshCw size={15} />
+                    </button>
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -1059,13 +1357,31 @@ export function Panel(): JSX.Element {
     managerName: '',
     managerEmail: '',
     managerWhatsapp: '',
+    createWhatsapp: true,
   });
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [userSaving, setUserSaving] = useState(false);
   const [usersError, setUsersError] = useState<string | null>(null);
+  const [userForm, setUserForm] = useState<UserForm>({
+    tenantId: '',
+    name: '',
+    email: '',
+    phone: '',
+    role: 'operador',
+  });
   const [whatsappInstances, setWhatsappInstances] = useState<AdminWhatsappInstance[]>([]);
   const [whatsappLoading, setWhatsappLoading] = useState(false);
+  const [whatsappSaving, setWhatsappSaving] = useState(false);
+  const [whatsappConnectingName, setWhatsappConnectingName] = useState<string | null>(null);
   const [whatsappError, setWhatsappError] = useState<string | null>(null);
+  const [whatsappQr, setWhatsappQr] = useState<{ instanceName: string; qr: EvolutionQrResult } | null>(null);
+  const [whatsappForm, setWhatsappForm] = useState<WhatsappForm>({
+    tenantId: '',
+    instanceName: '',
+    ownerPhone: '',
+    createInEvolution: true,
+  });
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualSaving, setManualSaving] = useState(false);
@@ -1108,7 +1424,9 @@ export function Panel(): JSX.Element {
   async function refreshAdmin(tokenOverride = panelToken): Promise<void> {
     setAdminError(null);
     try {
-      setAdmin(await fetchAdminMe(tokenOverride));
+      const next = await fetchAdminMe(tokenOverride);
+      setAdmin(next);
+      setTenants(next.tenants);
     } catch (e) {
       if (handleAccessError(e)) return;
       setAdminError((e as Error).message);
@@ -1170,6 +1488,13 @@ export function Panel(): JSX.Element {
     if (activeSection === 'users') void refreshUsers(panelToken);
     if (activeSection === 'whatsapp') void refreshWhatsapp(panelToken);
   }, [accessRequired, activeSection, panelToken]);
+
+  useEffect(() => {
+    const fallbackTenant = admin?.auth.tenantId ?? tenants[0]?.id ?? '';
+    if (!fallbackTenant) return;
+    setUserForm((current) => current.tenantId ? current : { ...current, tenantId: fallbackTenant });
+    setWhatsappForm((current) => current.tenantId ? current : { ...current, tenantId: fallbackTenant });
+  }, [admin?.auth.tenantId, tenants]);
 
   const leads = data?.leads ?? [];
   const filteredLeads = useMemo(() => {
@@ -1237,7 +1562,7 @@ export function Panel(): JSX.Element {
     setTenantSaving(true);
     setTenantError(null);
     try {
-      await createAdminTenant(tenantForm, panelToken);
+      const created = await createAdminTenant(tenantForm, panelToken);
       setTenantForm({
         documentType: 'cnpj',
         document: '',
@@ -1246,15 +1571,96 @@ export function Panel(): JSX.Element {
         managerName: '',
         managerEmail: '',
         managerWhatsapp: '',
+        createWhatsapp: true,
       });
+      if (created.whatsapp?.instance) {
+        setWhatsappInstances((current) => [created.whatsapp!.instance, ...current.filter((item) => item.id !== created.whatsapp!.instance.id)]);
+      }
       await refreshTenants();
       await refreshAdmin();
       if (activeSection === 'users') await refreshUsers();
+      if (activeSection === 'whatsapp') await refreshWhatsapp();
     } catch (e) {
       if (handleAccessError(e)) return;
       setTenantError((e as Error).message);
     } finally {
       setTenantSaving(false);
+    }
+  }
+
+  async function submitUser(): Promise<void> {
+    setUserSaving(true);
+    setUsersError(null);
+    try {
+      const created = await createAdminUser(userForm, panelToken);
+      setUsers((current) => [created, ...current.filter((user) => user.id !== created.id)]);
+      setUserForm((current) => ({
+        tenantId: current.tenantId,
+        name: '',
+        email: '',
+        phone: '',
+        role: admin?.auth.isSuperadmin ? current.role : 'operador',
+      }));
+      await refreshUsers();
+    } catch (e) {
+      if (handleAccessError(e)) return;
+      setUsersError((e as Error).message);
+    } finally {
+      setUserSaving(false);
+    }
+  }
+
+  async function submitWhatsapp(): Promise<void> {
+    setWhatsappSaving(true);
+    setWhatsappError(null);
+    try {
+      const created = await createWhatsappInstance(whatsappForm, panelToken);
+      setWhatsappInstances((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+      setWhatsappForm((current) => ({
+        tenantId: current.tenantId,
+        instanceName: '',
+        ownerPhone: '',
+        createInEvolution: true,
+      }));
+      await refreshWhatsapp();
+    } catch (e) {
+      if (handleAccessError(e)) return;
+      setWhatsappError((e as Error).message);
+    } finally {
+      setWhatsappSaving(false);
+    }
+  }
+
+  async function connectWhatsapp(instanceName: string): Promise<void> {
+    setWhatsappConnectingName(instanceName);
+    setWhatsappError(null);
+    try {
+      const result = await connectWhatsappInstance(instanceName, panelToken);
+      setWhatsappQr({ instanceName, qr: result.qr });
+      if (result.instance) {
+        setWhatsappInstances((current) => current.map((item) => item.evolutionInstanceName === instanceName ? result.instance! : item));
+      }
+    } catch (e) {
+      if (handleAccessError(e)) return;
+      setWhatsappError((e as Error).message);
+    } finally {
+      setWhatsappConnectingName(null);
+    }
+  }
+
+  async function updateWhatsappState(instanceName: string): Promise<void> {
+    setWhatsappConnectingName(instanceName);
+    setWhatsappError(null);
+    try {
+      const instance = await refreshWhatsappState(instanceName, panelToken);
+      if (instance) {
+        setWhatsappInstances((current) => current.map((item) => item.evolutionInstanceName === instanceName ? instance : item));
+      }
+    } catch (e) {
+      if (handleAccessError(e)) return;
+      setWhatsappError((e as Error).message);
+    } finally {
+      setWhatsappConnectingName(null);
     }
   }
 
@@ -1275,6 +1681,7 @@ export function Panel(): JSX.Element {
       persistPanelToken(nextToken);
       setPanelToken(nextToken);
       setAdmin(nextAdmin);
+      setTenants(nextAdmin.tenants);
       setData(nextData);
       setAccessRequired(false);
       setAccessError(null);
@@ -1412,12 +1819,33 @@ export function Panel(): JSX.Element {
             onRefresh={() => void refreshTenants()}
           />
         ) : activeSection === 'users' ? (
-          <UsersSection users={users} loading={usersLoading} error={usersError} onRefresh={() => void refreshUsers()} />
+          <UsersSection
+            admin={admin}
+            tenants={tenants}
+            values={userForm}
+            users={users}
+            loading={usersLoading}
+            saving={userSaving}
+            error={usersError}
+            onChange={setUserForm}
+            onSubmit={() => void submitUser()}
+            onRefresh={() => void refreshUsers()}
+          />
         ) : activeSection === 'whatsapp' ? (
           <WhatsappSection
+            admin={admin}
+            tenants={tenants}
+            values={whatsappForm}
             instances={whatsappInstances}
             loading={whatsappLoading}
+            saving={whatsappSaving}
+            connectingName={whatsappConnectingName}
+            selectedQr={whatsappQr}
             error={whatsappError}
+            onChange={setWhatsappForm}
+            onSubmit={() => void submitWhatsapp()}
+            onConnect={(instanceName) => void connectWhatsapp(instanceName)}
+            onState={(instanceName) => void updateWhatsappState(instanceName)}
             onRefresh={() => void refreshWhatsapp()}
           />
         ) : (

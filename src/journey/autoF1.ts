@@ -122,8 +122,11 @@ function normalizeMaritalStatus(value: string): string {
 }
 
 function normalizeRenewal(value: string): { insurer: string } {
-  const v = value.trim().toLowerCase();
-  if (v === 'renewal' || v.includes('renov')) return { insurer: 'renewal' };
+  // TODO próxima rodada: implementar fluxo de renovação completo.
+  // Segfy exige data.renewal.{insurer, prior_policy, prior_policy_end} quando insurer='renewal'.
+  // Precisa de 3 steps condicionais: renewal_insurer, renewal_prior_policy, renewal_prior_policy_end.
+  // Por enquanto, forçar 'new' no payload pra desbloquear cotação no mostruário.
+  void value;
   return { insurer: 'new' };
 }
 

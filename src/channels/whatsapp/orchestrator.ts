@@ -252,11 +252,6 @@ async function triggerCalculate(
 ): Promise<{ guid: string; link: string; topReply: string } | null> {
   try {
     const request: AutoF1QuoteRequest = { answers: answersFromSession(session) };
-    // DEBUG TEMPORÁRIO 2026-05-18 — descobrir por que job_garage vai inválido na Segfy
-    if (process.env.ROBOCOTE_DEBUG_PAYLOAD === '1') {
-      const safePayload = { ...request.answers, document: '<redacted>', contact: '<redacted>', main_driver_document: '<redacted>' };
-      console.log('[DEBUG_PAYLOAD]', JSON.stringify(safePayload));
-    }
     const result = await runAutoF1Quote(request, 45000);
     const link = buildQuoteLink(result.guid);
     const top = result.quoteSummary.options

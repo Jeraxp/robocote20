@@ -7,7 +7,12 @@ import { dumpJSON } from '../utils/logger.js';
 
 const DEFAULT_QUOTE_TIMEOUT_MS = 45000;
 const MAX_QUOTE_TIMEOUT_MS = 90000;
-const RESULT_IDLE_MS = 4000;
+// Quando 1 seguradora responde rápido com exception e as outras demoram, 4s era
+// curto demais e desconectava antes das demais retornarem. Subido pra 15s.
+const RESULT_IDLE_MS = 15000;
+// Tempo mínimo de espera após receber o 1º RESULT, dando chance pras seguradoras
+// lentas responderem mesmo que a Segfy não emita mais STEPs.
+const MIN_WAIT_AFTER_FIRST_RESULT_MS = 12000;
 
 export const REAL_MODE = 'real';
 
@@ -361,16 +366,39 @@ async function waitForResultWindow(session: SocketSession, timeoutMs: number): P
   const startedAt = Date.now();
   let lastEventCount = session.events.length;
   let lastEventAt = Date.now();
+  let firstResultAt: number | null = null;
 
   while (Date.now() - startedAt < timeoutMs) {
-    const resultCount = session.events.filter((event) => eventAction(event) === 'RESULT').length;
-
     if (session.events.length !== lastEventCount) {
       lastEventCount = session.events.length;
       lastEventAt = Date.now();
     }
 
-    if (resultCount > 0 && Date.now() - lastEventAt >= RESULT_IDLE_MS) {
+    const stepCompanies = collectCompanies(session.events, 'STEP');
+    const resultCompanies = collectCompanies(session.events, 'RESULT');
+    const resultCount = resultCompanies.size;
+
+    if (resultCount > 0 && firstResultAt === null) {
+      firstResultAt = Date.now();
+    }
+
+    // Todas as companies que iniciaram (STEP) já retornaram RESULT — saída limpa.
+    if (
+      stepCompanies.size > 0 &&
+      resultCount >= stepCompanies.size &&
+      [...stepCompanies].every((c) => resultCompanies.has(c))
+    ) {
+      return false;
+    }
+
+    // Janela ociosa: nenhum evento há RESULT_IDLE_MS, mas respeitando o mínimo
+    // de espera após o primeiro RESULT (algumas seguradoras demoram mais).
+    if (
+      resultCount > 0 &&
+      Date.now() - lastEventAt >= RESULT_IDLE_MS &&
+      firstResultAt !== null &&
+      Date.now() - firstResultAt >= MIN_WAIT_AFTER_FIRST_RESULT_MS
+    ) {
       return false;
     }
 
@@ -378,6 +406,17 @@ async function waitForResultWindow(session: SocketSession, timeoutMs: number): P
   }
 
   return true;
+}
+
+function collectCompanies(events: SocketEvent[], action: 'STEP' | 'RESULT'): Set<string> {
+  const set = new Set<string>();
+  for (const event of events) {
+    if (eventAction(event) !== action) continue;
+    const data = event.data as { company?: { name?: string } } | undefined;
+    const name = data?.company?.name;
+    if (typeof name === 'string' && name.trim()) set.add(name.trim().toLowerCase());
+  }
+  return set;
 }
 
 function extractGuid(result: CalcularResult): string {

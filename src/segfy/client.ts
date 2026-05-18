@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { getBearer } from './auth.js';
 import { dumpJSON } from '../utils/logger.js';
-import { redactDeep, redactString } from '../utils/redact.js';
+import { redactString } from '../utils/redact.js';
 
 const BASE_URL = process.env.SEGFY_BASE_URL ?? 'https://api.automation.segfy.com';
 const CORRETORA_TOKEN = process.env.RPI_CORRETORA_TOKEN ?? '';
@@ -66,16 +66,19 @@ function withTokenInQuery(url: URL, tokenTransport: TokenTransport): void {
 }
 
 async function parseBody(res: Response): Promise<{ body: unknown; contentType: string | null }> {
+  // CRÍTICO: NUNCA aplicar redactDeep aqui — body é dado de negócio, não log.
+  // A redação só acontece no dumpJSON (logger.ts). Aplicar aqui transforma
+  // null em "<PII_MASKED>" e corrompe lógica downstream (Jera 2026-05-18).
   const contentType = res.headers.get('content-type');
   const text = await res.text();
   if (contentType?.includes('application/json')) {
     try {
-      return { body: redactDeep(JSON.parse(text)), contentType };
+      return { body: JSON.parse(text), contentType };
     } catch {
-      return { body: redactString(text), contentType };
+      return { body: text, contentType };
     }
   }
-  return { body: redactString(text), contentType };
+  return { body: text, contentType };
 }
 
 export async function segfyRequest<T = unknown>({

@@ -153,12 +153,20 @@ function parseYear(value: string): number {
   throw new Error('Ano do veículo inválido.');
 }
 
+function normalizeUtilizationType(usage: string): 'personal' | 'job' | 'both' {
+  const v = usage.toLowerCase();
+  if (v.includes('empresa') || v.includes('frota') || v.includes('pj')) return 'job';
+  if (v.includes('trabalho')) return 'both';
+  return 'personal';
+}
+
 function usageQuestionnaire(
   answers: AutoF1QuoteRequest['answers'],
   residenceType: 'house' | 'apartment',
   residenceGarage: string,
 ): Record<string, unknown> {
   // Respostas reais do segurado (Jera 2026-05-17) — não chutar.
+  // Enums oficiais do swagger Segfy NJ (calculate). Não inventar valores.
   const youngDriver = answers.young_driver === 'yes';
   const studies = answers.studies === 'yes';
   const studyHasGarage = studies && answers.study_garage === 'yes';
@@ -167,18 +175,22 @@ function usageQuestionnaire(
   const monthlyKm = Number(answers.monthly_km) > 0 ? Number(answers.monthly_km) : 1000;
 
   return {
-    utilization_type: 'personal',
-    other_driver: youngDriver ? 'young_driver' : 'does_not_exist',
+    utilization_type: normalizeUtilizationType(answers.usage),
+    // young_driver=yes → "yes_both" (não perguntamos sexo do jovem, mais conservador)
+    other_driver: youngDriver ? 'yes_both' : 'does_not_exist',
+    // study_garage enum: 'yes' | 'no' | 'does_not_use' | 'does_not_study' | 'not_kept_in_garage'
     study_garage: !studies
       ? 'does_not_study'
       : studyHasGarage
-        ? 'yes_private_garage'
-        : 'no_private_garage',
+        ? 'yes'
+        : 'no',
+    // job_garage enum: 'yes' | 'no' | 'does_not_use' | 'does_not_work' | 'not_kept_in_garage'
+    // Quando lead não usa carro pra trabalho, optamos por 'does_not_use' (trabalha mas não usa carro).
     job_garage: !workCommute
-      ? 'does_not_work'
+      ? 'does_not_use'
       : workHasGarage
-        ? 'yes_private_garage'
-        : 'no_private_garage',
+        ? 'yes'
+        : 'no',
     work_distance: workCommute ? 20 : 0,
     tax_exemption: 'not_applicable',
     monthly_km: monthlyKm,

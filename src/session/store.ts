@@ -41,6 +41,8 @@ const ACTIVE_STEPS = [
   'contact',
   // driver_birth_date + driver_sex eliminados — vêm via lookup /insured do CPF
   'document',
+  'driver_birth_date',
+  'driver_sex',
   'quote_link',
 ] as const;
 export type SessionStepId = (typeof ACTIVE_STEPS)[number] | 'complete';

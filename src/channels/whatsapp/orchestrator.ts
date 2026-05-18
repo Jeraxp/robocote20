@@ -711,6 +711,8 @@ const STEP_ORDER = [
   'work_garage',
   'monthly_km',
   'document',
+  'driver_birth_date',
+  'driver_sex',
   'quote_link',
 ] as const;
 
@@ -729,6 +731,14 @@ function shouldSkipStep(stepId: StepId, answers: Record<string, { rawValue?: str
   }
   if (stepId === 'work_garage') {
     return answers.work_commute?.rawValue !== 'yes';
+  }
+  // driver_birth_date e driver_sex só aparecem como FALLBACK quando o lookup
+  // /insured falhou (ou seja, ainda não estão preenchidos nos answers).
+  if (stepId === 'driver_birth_date') {
+    return Boolean(answers.driver_birth_date?.rawValue);
+  }
+  if (stepId === 'driver_sex') {
+    return Boolean(answers.driver_sex?.rawValue);
   }
   return false;
 }
@@ -767,6 +777,8 @@ const STEP_PROMPT: Record<StepId, string> = {
   work_garage: 'No trabalho, tem garagem fechada pra deixar o carro?',
   monthly_km: 'Quantos quilômetros você roda por mês, mais ou menos? Pode ser estimativa.',
   document: 'Última coisa antes do cálculo: me passa o CPF. As seguradoras consultam Serasa pra precificar — fica protegido com criptografia.',
+  driver_birth_date: 'Não consegui puxar seus dados cadastrais. Pode me passar a sua data de nascimento? (DD/MM/AAAA)',
+  driver_sex: 'E o sexo que consta no cadastro — masculino ou feminino?',
   quote_link: 'Pronto. Posso calcular agora?',
 };
 

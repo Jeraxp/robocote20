@@ -32,6 +32,8 @@ const ACTIVE_STEPS = [
   'coverage',
   'contact',
   'document',
+  'driver_birth_date',
+  'driver_sex',
   'quote_link',
 ] as const;
 
@@ -196,6 +198,8 @@ const STEP_CONTEXT: Record<ActiveStepId, { title: string; prompt: string }> = {
   work_garage: { title: 'Garagem trabalho', prompt: 'No trabalho, tem garagem fechada pra deixar o carro?' },
   monthly_km: { title: 'KM mensal', prompt: 'Quantos quilômetros você roda por mês, mais ou menos? Pode ser estimativa.' },
   document: { title: 'CPF', prompt: 'Última coisa antes do cálculo: me passa o CPF. As seguradoras consultam Serasa pra precificar — fica protegido com criptografia.' },
+  driver_birth_date: { title: 'Nascimento', prompt: 'Não consegui puxar seus dados cadastrais. Pode me passar a sua data de nascimento? (DD/MM/AAAA)' },
+  driver_sex: { title: 'Sexo', prompt: 'E o sexo que consta no cadastro — masculino ou feminino?' },
   quote_link: { title: 'Link', prompt: 'Pronto para calcular na Segfy e abrir a sala consultiva?' },
 };
 

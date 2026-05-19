@@ -110,6 +110,20 @@ function looksLikeDenial(message: string): boolean {
   return false;
 }
 
+/**
+ * Lead quer reiniciar a conversa (palavra-chave em qualquer ponto, ou intenção de
+ * nova cotação quando a anterior já fechou). Em sessão `completed`, aceita gatilhos
+ * mais frouxos ("outro carro", "outro seguro") porque o lead não tem mais nada
+ * pra discutir no estado atual além de cotar de novo.
+ */
+function isResetIntent(message: string, completed: boolean): boolean {
+  const m = normalizeMsg(message);
+  if (!m) return false;
+  if (/\b(reiniciar|recome[cç]ar|come[cç]ar de novo|come[cç]ar do zero|do zero|do come[cç]o|do inicio|nova cota[cç][aã]o|outra cota[cç][aã]o|cotar de novo|nova cotacao|outra cotacao)\b/.test(m)) return true;
+  if (completed && /\b(outro carro|outra moto|outro seguro|outro ve[ií]culo|novo carro|nova cota)\b/.test(m)) return true;
+  return false;
+}
+
 const CALCULATE_IDEMPOTENCY_MS = 60_000;
 const PROGRESS_NUDGE_MS = 15_000;
 
@@ -276,7 +290,7 @@ async function triggerCalculate(
 export async function processWhatsappTurn(
   inbound: EvolutionInboundMessage,
   options: { tenantId?: string } = {},
-): Promise<{ replySent: string | null; action: AssistantAction | 'greet' | 'calc_failed'; sessionAfter: SessionState | null }> {
+): Promise<{ replySent: string | null; action: AssistantAction | 'greet' | 'calc_failed' | 'reset'; sessionAfter: SessionState | null }> {
   if (inbound.fromSelf) {
     return { replySent: null, action: 'none', sessionAfter: null };
   }
@@ -298,9 +312,22 @@ export async function processWhatsappTurn(
     return { replySent: greeting, action: 'greet', sessionAfter: persisted };
   }
 
+  // Reset por palavra-chave — funciona em qualquer ponto. Após cotação concluída
+  // também aceita "outra cotação"/"novo carro" pra evitar lead preso no "complete".
+  if (isResetIntent(inbound.text, session.completed)) {
+    const fresh = createInitialSessionState(key);
+    const ack = session.completed
+      ? 'Beleza, vamos pra uma nova cotação então.'
+      : 'Tudo bem, vamos começar do zero.';
+    const greeting = `${ack}\n\n${GREETING_LINES.slice(1).join('\n\n')}`;
+    await sendWhatsappText(inbound.fromPhone, greeting);
+    const persisted = await sessionStore.upsert(recordTurn(fresh, inbound, greeting, 'reset'));
+    return { replySent: greeting, action: 'reset', sessionAfter: persisted };
+  }
+
   if (session.completed) {
     // Pós-cotação ainda não tem fluxo dedicado. Resposta gentil temporária.
-    const reply = 'Sua cotação tá pronta acima. Em breve eu vou poder te explicar as opções por aqui também — por enquanto, dá uma olhada no link que mandei.';
+    const reply = 'Sua cotação tá pronta acima. Em breve eu vou poder te explicar as opções por aqui também — por enquanto, dá uma olhada no link que mandei.\n\nSe quiser fazer outra cotação, é só dizer "nova cotação" que eu recomeço.';
     await sendWhatsappText(inbound.fromPhone, reply);
     const persisted = await sessionStore.upsert(recordTurn(session, inbound, reply, 'none'));
     return { replySent: reply, action: 'none', sessionAfter: persisted };

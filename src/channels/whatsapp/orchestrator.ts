@@ -111,6 +111,22 @@ function looksLikeDenial(message: string): boolean {
 }
 
 /**
+ * Lead enviou nome completo (mínimo nome + sobrenome com 2+ chars cada).
+ * Necessário porque seguradoras rejeitam o calculate com "Nome não possui sobrenome"
+ * — bug observado 2026-05-19 quando lead digitou só "jeronimo" e o sistema avançou.
+ * Aceita acentos, hífens (Maria-José) e apóstrofos (D'Angelo).
+ */
+function looksLikeFullName(message: string): boolean {
+  const cleaned = (message ?? '')
+    .trim()
+    .replace(/[^A-Za-zÀ-ÿ\s'-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const parts = cleaned.split(' ').filter((p) => p.length >= 2);
+  return parts.length >= 2;
+}
+
+/**
  * Lead quer reiniciar a conversa (palavra-chave em qualquer ponto, ou intenção de
  * nova cotação quando a anterior já fechou). Em sessão `completed`, aceita gatilhos
  * mais frouxos ("outro carro", "outro seguro") porque o lead não tem mais nada
@@ -366,6 +382,16 @@ export async function processWhatsappTurn(
     // Mensagem ambígua: limpa proposta pendente e segue fluxo normal — o handler
     // decide o que fazer com a nova mensagem (pode até gerar nova proposta).
     session = await sessionStore.upsert({ ...session, pendingProposal: null });
+  }
+
+  // ─── Step name: exige nome completo (nome + sobrenome) ────────────────────
+  // Seguradoras rejeitam o calculate com "Nome não possui sobrenome" — caso real
+  // observado 2026-05-19 quando o lead digitou "jeronimo" e o sistema avançou.
+  if (session.stepId === 'name' && !looksLikeFullName(inbound.text)) {
+    const reply = 'Pra cotar com as seguradoras preciso do nome completo (nome + sobrenome). Pode me passar?';
+    await sendWhatsappText(inbound.fromPhone, reply);
+    const persisted = await sessionStore.upsert(recordTurn(session, inbound, reply, 'ask_clarification'));
+    return { replySent: reply, action: 'ask_clarification', sessionAfter: persisted };
   }
 
   // ─── Step vehicle_plate: decode automático + UX de confirmação inteligente ──

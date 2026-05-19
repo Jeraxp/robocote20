@@ -236,6 +236,7 @@ function answersFromSession(session: SessionState): AutoF1QuoteRequest['answers'
     vehicle_fuel_type: meta.fuel_type ?? '',
     usage: getRaw('usage'),
     renewal_status: getRaw('renewal_status'),
+    renewal_bonus: getRaw('renewal_bonus'),
     zip_code: getRaw('zip_code'),
     residence_type: getRaw('residence_type'),
     residence_garage: getRaw('residence_garage'),
@@ -723,6 +724,7 @@ const STEP_ORDER = [
   'vehicle_model',
   'usage',
   'renewal_status',
+  'renewal_bonus',
   'zip_code',
   'residence_type',
   'residence_garage',
@@ -759,6 +761,12 @@ function shouldSkipStep(stepId: StepId, answers: Record<string, { rawValue?: str
   if (stepId === 'work_garage') {
     return answers.work_commute?.rawValue !== 'yes';
   }
+  // renewal_bonus só pergunta se o lead disse "renovação" no step anterior.
+  // Novo seguro não usa bônus, payload Segfy vai com insurer='new' direto.
+  if (stepId === 'renewal_bonus') {
+    const v = (answers.renewal_status?.rawValue ?? answers.renewal_status?.value ?? '').toLowerCase();
+    return !/reno|renew/.test(v);
+  }
   // driver_birth_date e driver_sex só aparecem como FALLBACK quando o lookup
   // /insured falhou (ou seja, ainda não estão preenchidos nos answers).
   if (stepId === 'driver_birth_date') {
@@ -789,6 +797,7 @@ const STEP_PROMPT: Record<StepId, string> = {
   vehicle_model: 'Qual modelo do veículo?',
   usage: 'O uso é pessoal, trabalho ou empresa/frota?',
   renewal_status: 'É seguro novo ou renovação?',
+  renewal_bonus: 'Qual é a sua classe de bônus atual? (de 0 a 10 — se não souber, é só dizer 0)',
   zip_code: 'Qual o CEP de residência? Pode mandar só os números.',
   residence_type: 'Mora em casa ou apartamento?',
   residence_garage: 'Tem garagem? Se sim, com ou sem portão eletrônico?',

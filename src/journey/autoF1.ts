@@ -32,6 +32,7 @@ const autoF1AnswersSchema = z.object({
   vehicle_fuel_type: z.string().trim().optional().default(''),
   usage: z.string().trim().min(2),
   renewal_status: z.string().trim().optional().default('new'),
+  renewal_bonus: z.string().trim().optional().default(''),
   zip_code: z.string().trim().optional().default(''),
   residence_type: z.string().trim().optional().default('apartment'),
   residence_garage: z.string().trim().optional().default('yes_with_electronic_gate'),
@@ -126,13 +127,38 @@ function normalizeMaritalStatus(value: string): string {
   return 'married';
 }
 
-function normalizeRenewal(value: string): { insurer: string } {
-  // TODO próxima rodada: implementar fluxo de renovação completo.
-  // Segfy exige data.renewal.{insurer, prior_policy, prior_policy_end} quando insurer='renewal'.
-  // Precisa de 3 steps condicionais: renewal_insurer, renewal_prior_policy, renewal_prior_policy_end.
-  // Por enquanto, forçar 'new' no payload pra desbloquear cotação no mostruário.
-  void value;
-  return { insurer: 'new' };
+function isRenewalStatus(value: string): boolean {
+  const v = (value ?? '').trim().toLowerCase();
+  return /reno|renew/.test(v);
+}
+
+/**
+ * Decide o bloco `renewal` do payload Segfy.
+ *
+ * - Novo seguro → `{ insurer: 'new' }` (única opção que dispensa demais campos).
+ * - Renovação  → `{ insurer: 'allianz', bonus_current }`. A seguradora foi cravada
+ *   automaticamente (Jera 2026-05-19) — apenas `insurer` é required no swagger
+ *   `/api/vehicle/version/1.0/calculate`, e a Segfy não usa o valor pra alterar
+ *   o cálculo (só o bônus importa). Se a corretora quiser dizer a real, é só
+ *   adicionar `renewal_insurer` como pergunta opcional depois.
+ */
+function normalizeRenewal(statusValue: string, bonusValue: string): {
+  insurer: string;
+  bonus_current?: string;
+} {
+  if (!isRenewalStatus(statusValue)) return { insurer: 'new' };
+  const bonus = normalizeBonusClass(bonusValue);
+  return { insurer: 'allianz', bonus_current: bonus };
+}
+
+/** Aceita "5", "classe 5", "bônus 7", "10" — retorna "0".."10" como string. */
+function normalizeBonusClass(value: string): string {
+  const m = String(value ?? '').match(/\d+/);
+  if (!m) return '0';
+  const n = Number(m[0]);
+  if (!Number.isFinite(n) || n < 0) return '0';
+  if (n > 10) return '10';
+  return String(n);
 }
 
 function normalizeResidenceType(value: string): 'house' | 'apartment' {
@@ -261,7 +287,7 @@ export function buildAutoF1Payload(
   const name = answers.name.trim();
   const zip = normalizeZip(answers.zip_code);
   const maritalStatus = normalizeMaritalStatus(answers.marital_status);
-  const renewal = normalizeRenewal(answers.renewal_status);
+  const renewal = normalizeRenewal(answers.renewal_status, answers.renewal_bonus);
   const residenceType = normalizeResidenceType(answers.residence_type);
   const residenceGarage = normalizeGarage(answers.residence_garage);
   const vehicle = resolveVehicle(answers);

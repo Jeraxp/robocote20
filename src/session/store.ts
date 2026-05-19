@@ -24,6 +24,7 @@ const ACTIVE_STEPS = [
   'vehicle_model',
   'usage',
   'renewal_status',
+  'renewal_bonus',
   'zip_code',
   'residence_type',
   'residence_garage',

@@ -84,9 +84,9 @@ export interface AutoF1QuoteRun {
   elapsedMs: number;
 }
 
-function dateInSaoPaulo(offsetYears = 0): string {
+function dateInSaoPaulo(offsetYears = 0, offsetDays = 0): string {
   const now = new Date();
-  const date = new Date(Date.UTC(now.getUTCFullYear() + offsetYears, now.getUTCMonth(), now.getUTCDate(), 12));
+  const date = new Date(Date.UTC(now.getUTCFullYear() + offsetYears, now.getUTCMonth(), now.getUTCDate() + offsetDays, 12));
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Sao_Paulo',
     year: 'numeric',
@@ -136,19 +136,28 @@ function isRenewalStatus(value: string): boolean {
  * Decide o bloco `renewal` do payload Segfy.
  *
  * - Novo seguro → `{ insurer: 'new' }` (única opção que dispensa demais campos).
- * - Renovação  → `{ insurer: 'allianz', bonus_current }`. A seguradora foi cravada
- *   automaticamente (Jera 2026-05-19) — apenas `insurer` é required no swagger
- *   `/api/vehicle/version/1.0/calculate`, e a Segfy não usa o valor pra alterar
- *   o cálculo (só o bônus importa). Se a corretora quiser dizer a real, é só
- *   adicionar `renewal_insurer` como pergunta opcional depois.
+ * - Renovação  → `{ insurer: 'allianz', bonus_current, prior_policy, prior_policy_end }`.
+ *   Seguradora cravada (Jera 2026-05-19) e apólice + data fim como placeholders.
+ *   Apesar do swagger oficial declarar APENAS `insurer` como required, a Segfy
+ *   na prática rejeita 422 quando insurer != 'new' sem `prior_policy` e
+ *   `prior_policy_end`. Confirmado experimentalmente 2026-05-19.
+ *   Os placeholders permitem o calculate passar; a seguradora pode aceitar ou
+ *   rejeitar essa cotação na ponta dela, mas o pipeline não trava.
  */
 function normalizeRenewal(statusValue: string, bonusValue: string): {
   insurer: string;
   bonus_current?: string;
+  prior_policy?: string;
+  prior_policy_end?: string;
 } {
   if (!isRenewalStatus(statusValue)) return { insurer: 'new' };
   const bonus = normalizeBonusClass(bonusValue);
-  return { insurer: 'allianz', bonus_current: bonus };
+  return {
+    insurer: 'allianz',
+    bonus_current: bonus,
+    prior_policy: '0000000000',
+    prior_policy_end: dateInSaoPaulo(0, 30),
+  };
 }
 
 /** Aceita "5", "classe 5", "bônus 7", "10" — retorna "0".."10" como string. */

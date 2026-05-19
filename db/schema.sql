@@ -18,6 +18,9 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS document_type text CHECK (document_
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS document text;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS document_digits text UNIQUE;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone text;
+-- Semi-white-label: cada corretora batiza o próprio agente (Helena, Carlos, etc).
+-- Null = usar default do ambiente (ROBOCOTE_AGENT_NAME) ou 'Robocote'.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS agent_name text;
 
 CREATE TABLE IF NOT EXISTS users (
   id text PRIMARY KEY,

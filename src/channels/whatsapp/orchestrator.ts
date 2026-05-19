@@ -29,15 +29,18 @@ import {
 } from '../../session/store.js';
 import type { EvolutionInboundMessage } from './evolution.js';
 import { sendWhatsappText } from './evolution.js';
+import { getAgentName } from '../../tenant/agent.js';
 
 const ROBOCOTE_QUOTE_BASE_URL = process.env.ROBOCOTE_QUOTE_BASE_URL?.trim() ?? '';
 const ROBOCOTE_TENANT_ID = process.env.ROBOCOTE_TENANT_ID?.trim() || 'rpi';
 
-const GREETING_LINES = [
-  'Olá! Eu sou o Robocote, o seu corretor digital inteligente.',
-  'Vou te ajudar a cotar seu seguro auto numa conversa simples. Pode responder do seu jeito.',
-  'Pra começar, qual é seu nome completo?',
-];
+function buildGreeting(agentName: string): string[] {
+  return [
+    `Olá! Eu sou o ${agentName}, o seu corretor digital inteligente.`,
+    'Vou te ajudar a cotar seu seguro auto numa conversa simples. Pode responder do seu jeito.',
+    'Pra começar, qual é seu nome completo?',
+  ];
+}
 
 function isLikelyCpfDigits(digits: string): boolean {
   if (digits.length !== 11 || /^(\d)\1{10}$/.test(digits)) return false;
@@ -323,7 +326,8 @@ export async function processWhatsappTurn(
 
   // Primeira mensagem: envia saudação e fica aguardando o nome.
   if (isNew) {
-    const greeting = GREETING_LINES.join('\n\n');
+    const agentName = await getAgentName(tenantId);
+    const greeting = buildGreeting(agentName).join('\n\n');
     await sendWhatsappText(inbound.fromPhone, greeting);
     const persisted = await sessionStore.upsert(recordTurn(session, inbound, greeting, 'greet'));
     return { replySent: greeting, action: 'greet', sessionAfter: persisted };
@@ -336,7 +340,8 @@ export async function processWhatsappTurn(
     const ack = session.completed
       ? 'Beleza, vamos pra uma nova cotação então.'
       : 'Tudo bem, vamos começar do zero.';
-    const greeting = `${ack}\n\n${GREETING_LINES.slice(1).join('\n\n')}`;
+    const agentName = await getAgentName(tenantId);
+    const greeting = `${ack}\n\n${buildGreeting(agentName).slice(1).join('\n\n')}`;
     await sendWhatsappText(inbound.fromPhone, greeting);
     const persisted = await sessionStore.upsert(recordTurn(fresh, inbound, greeting, 'reset'));
     return { replySent: greeting, action: 'reset', sessionAfter: persisted };

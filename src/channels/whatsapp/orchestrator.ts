@@ -845,7 +845,8 @@ const STEP_PROMPT: Record<StepId, string> = {
   residence_garage: 'Tem garagem? Se sim, com ou sem portão eletrônico?',
   marital_status: 'Qual seu estado civil? Solteiro, casado, divorciado ou viúvo.',
   coverage: 'Na decisão, prioriza economia, equilíbrio ou proteção?',
-  contact: 'Qual WhatsApp o corretor pode usar pra continuar? (pode pular se quiser)',
+  // TODO: hoje o step `contact` é obrigatório. Quando implementar skip real, restaurar "(pode pular se quiser)".
+  contact: 'Qual WhatsApp o corretor pode usar pra continuar?',
   is_main_driver: 'Você é quem dirige o carro na maior parte do tempo, ou é outra pessoa?',
   main_driver_document: 'Beleza. Me passa o CPF de quem dirige principalmente — uso pra buscar os dados direto no cadastro.',
   young_driver: 'Mais alguém com menos de 26 anos mora com você e dirige esse carro? (Isso pode pesar no preço final.)',

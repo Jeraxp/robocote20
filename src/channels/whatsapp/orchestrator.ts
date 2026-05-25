@@ -30,6 +30,7 @@ import {
 import type { EvolutionInboundMessage } from './evolution.js';
 import { sendWhatsappText } from './evolution.js';
 import { getAgentName } from '../../tenant/agent.js';
+import { cacheQuoteContext } from '../../quote/contextCache.js';
 
 const ROBOCOTE_QUOTE_BASE_URL = process.env.ROBOCOTE_QUOTE_BASE_URL?.trim() ?? '';
 const ROBOCOTE_TENANT_ID = process.env.ROBOCOTE_TENANT_ID?.trim() || 'rpi';
@@ -287,6 +288,15 @@ async function triggerCalculate(
   try {
     const request: AutoF1QuoteRequest = { answers: answersFromSession(session) };
     const result = await runAutoF1Quote(request, 45000);
+    // Registra contexto da cotação (tenantId + customer) pro Quote Room resolver agent_name dinâmico.
+    cacheQuoteContext(
+      result.guid,
+      {
+        firstName: session.customerFirstName,
+        coveragePreference: session.coveragePreference,
+      },
+      session.tenantId,
+    );
     const link = buildQuoteLink(result.guid);
     const top = result.quoteSummary.options
       .filter((o) => o.category === 'principal')
@@ -698,6 +708,7 @@ export async function processWhatsappTurn(
   const result = await handleAutoF1AssistantMessage({
     message: inbound.text,
     channel: 'whatsapp',
+    tenantId,
     snapshot: {
       stepId: session.stepId === 'complete' ? 'quote_link' : session.stepId,
       completed: false,

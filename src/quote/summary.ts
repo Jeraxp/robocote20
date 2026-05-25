@@ -57,6 +57,8 @@ export interface QuoteSummary {
   source: 'segfy-show-results';
   guid: string;
   quotationId: string;
+  /** Nome do agente exibido no Quote Room (semi-white-label por tenant). */
+  agentName: string;
   quoteDate: string | null;
   validUntil: string | null;
   customer: QuoteCustomerInfo;
@@ -377,6 +379,7 @@ function pickRecommendations(options: QuoteOptionSummary[]): QuoteRecommendation
 function buildAdvisor(
   recommendations: QuoteRecommendation[],
   options: QuoteOptionSummary[],
+  agentName: string,
   customer?: QuoteCustomerInfo,
 ): QuoteSummary['advisor'] {
   const preference = customer?.coveragePreference ?? null;
@@ -403,7 +406,7 @@ function buildAdvisor(
       ]
     : preference === 'Proteção'
       ? [
-          'Score Robocote prioriza assistência ampla, franquia baixa e amplitude de cobertura.',
+          `Score ${agentName} prioriza assistência ampla, franquia baixa e amplitude de cobertura.`,
           'Compreensiva 100% FIPE entrega indenização integral em perda total.',
           'Vale conferir a rede credenciada da seguradora pra ter conforto em sinistro.',
         ]
@@ -414,7 +417,7 @@ function buildAdvisor(
         ];
 
   return {
-    headline: 'Recomendação Robocote',
+    headline: `Recomendação ${agentName}`,
     summary,
     bullets,
   };
@@ -455,6 +458,7 @@ function buildCustomer(
 export function normalizeQuoteSummary(
   response: SegfyResponse<ResultadoResponse>,
   customerOverride?: QuoteCustomerInfo,
+  agentName: string = 'Robocote',
 ): QuoteSummary {
   const body = response.body;
   const options = normalizeOptions(body);
@@ -474,6 +478,7 @@ export function normalizeQuoteSummary(
     source: 'segfy-show-results',
     guid: stringValue(body.guid),
     quotationId: stringValue(body.quotation_id, stringValue(body.id)),
+    agentName,
     quoteDate: stringValue(quotePayload.quotation_date) || stringValue(quoteData.quotation_date) || null,
     validUntil: stringValue(quotePayload.validity_budget) || stringValue(quoteData.validity_budget) || null,
     customer,
@@ -488,7 +493,7 @@ export function normalizeQuoteSummary(
     },
     recommendations,
     selectedRecommendation: 'balanced',
-    advisor: buildAdvisor(recommendations, options, customer),
+    advisor: buildAdvisor(recommendations, options, agentName, customer),
     options,
     generatedAt: new Date().toISOString(),
   };
@@ -497,8 +502,9 @@ export function normalizeQuoteSummary(
 export async function getQuoteSummary(
   guid: string,
   customerOverride?: QuoteCustomerInfo,
+  agentName: string = 'Robocote',
 ): Promise<QuoteSummary> {
-  return normalizeQuoteSummary(await getResultado({ guid }), customerOverride);
+  return normalizeQuoteSummary(await getResultado({ guid }), customerOverride, agentName);
 }
 
 export { isCoverageEmpty };

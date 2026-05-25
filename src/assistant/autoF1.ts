@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { getRobocotePersona } from './persona.js';
 import { loadCatalogForStep, stepNeedsCatalog } from '../catalog/auto.js';
+import { getAgentName } from '../tenant/agent.js';
 
 const TASKDUN_AI_BASE_URL = process.env.TASKDUN_AI_BASE_URL?.trim() ?? '';
 const TASKDUN_AI_API_KEY = process.env.TASKDUN_AI_API_KEY?.trim() ?? '';
@@ -53,6 +54,9 @@ const catalogItemSchema = z.object({
 const assistantRequestSchema = z.object({
   message: z.string().trim().min(1).max(1400),
   channel: channelSchema,
+  // tenantId opcional — quando presente, resolve agent_name dinâmico via tenant/agent.
+  // Quando vazio, getAgentName cai pra env ROBOCOTE_AGENT_NAME ou 'Robocote'.
+  tenantId: z.string().optional().default(''),
   snapshot: z.object({
     stepId: z.enum(ACTIVE_STEPS),
     completed: z.boolean().optional().default(false),
@@ -622,9 +626,9 @@ async function chatCompletion({
   return content;
 }
 
-function routerSystemPrompt(): string {
+function routerSystemPrompt(agentName: string): string {
   return [
-    'Você é o roteador de intenção do Robocote, corretor digital inteligente da Robocote/Taskdun.',
+    `Você é o roteador de intenção do ${agentName}, corretor digital inteligente.`,
     'Sua função NÃO é falar com o cliente — é classificar a intenção do turno e extrair dado quando for o caso.',
     'Sempre retorne JSON válido. Nada de texto fora do JSON.',
     '',
@@ -726,8 +730,8 @@ function summarizeAnswers(answers: AssistantRequest['snapshot']['answers']): Rec
   return out;
 }
 
-async function replySystemPrompt(channel: Channel, mode: AssistantMode): Promise<string> {
-  const persona = await getRobocotePersona();
+async function replySystemPrompt(channel: Channel, mode: AssistantMode, agentName: string): Promise<string> {
+  const persona = await getRobocotePersona(agentName);
   const { maxChars, humanLabel } = channelLimits(channel);
 
   const modeBlock = mode === 'consult'
@@ -771,7 +775,7 @@ async function replySystemPrompt(channel: Channel, mode: AssistantMode): Promise
     '',
     '---',
     '',
-    'Sua saída: JSON válido { "reply": "<sua mensagem como Robocote>" }. Nada fora do JSON.',
+    `Sua saída: JSON válido { "reply": "<sua mensagem como ${agentName}>" }. Nada fora do JSON.`,
   ].join('\n');
 }
 
@@ -958,12 +962,15 @@ function proposedAnswerFromRouter(
 async function taskdunAi(request: AssistantRequest): Promise<AssistantResponse | null> {
   if (!configured()) return null;
 
+  // Resolve nome do agente (DB tenant.agent_name → env → 'Robocote') uma vez por turno.
+  const agentName = await getAgentName(request.tenantId);
+
   const routerContent = await chatCompletion({
     model: ROBOCOTE_EXTRACTOR_MODEL,
     json: true,
     temperature: 0.1,
     messages: [
-      { role: 'system', content: routerSystemPrompt() },
+      { role: 'system', content: routerSystemPrompt(agentName) },
       { role: 'user', content: routerUserPrompt(request) },
     ],
   });
@@ -1001,7 +1008,7 @@ async function taskdunAi(request: AssistantRequest): Promise<AssistantResponse |
       model: replyModel,
       json: true,
       messages: [
-        { role: 'system', content: await replySystemPrompt(request.channel, router.mode) },
+        { role: 'system', content: await replySystemPrompt(request.channel, router.mode, agentName) },
         { role: 'user', content: replyUserPrompt(request, router, proposedAnswer, usedHint) },
       ],
     });

@@ -10,6 +10,8 @@ import {
   writableTenantId,
 } from '../auth/context.js';
 import { getQuoteSummary, type QuoteCustomerInfo, type CoveragePreference } from '../quote/summary.js';
+import { cacheQuoteContext, readQuoteContext } from '../quote/contextCache.js';
+import { getAgentName } from '../tenant/agent.js';
 import { autoF1QuoteRequestSchema, runAutoF1Quote } from '../journey/autoF1.js';
 import { handleAutoF1AssistantMessage, parseAssistantRequest } from '../assistant/autoF1.js';
 import { parseRagSearchRequest, searchKnowledge } from '../assistant/rag.js';
@@ -60,23 +62,7 @@ function requirePanelAccess(c: Context): Response | null {
   }, 401);
 }
 
-// Cache em memória do contexto do lead por GUID — sobrevive entre runAutoF1Quote e getQuoteSummary.
-// Suficiente pro spike; quando F4 entrar com Postgres, vira tabela `quote_meta`.
-const QUOTE_CUSTOMER_CACHE = new Map<string, { info: QuoteCustomerInfo; expiresAt: number }>();
-const QUOTE_CUSTOMER_TTL_MS = 1000 * 60 * 60 * 24; // 24h
-function cacheCustomerForGuid(guid: string, info: QuoteCustomerInfo): void {
-  QUOTE_CUSTOMER_CACHE.set(guid, { info, expiresAt: Date.now() + QUOTE_CUSTOMER_TTL_MS });
-}
-
-function readCustomerForGuid(guid: string): QuoteCustomerInfo | undefined {
-  const entry = QUOTE_CUSTOMER_CACHE.get(guid);
-  if (!entry) return undefined;
-  if (entry.expiresAt < Date.now()) {
-    QUOTE_CUSTOMER_CACHE.delete(guid);
-    return undefined;
-  }
-  return entry.info;
-}
+// Cache movido pra src/quote/contextCache.ts (compartilhado com orchestrator WhatsApp).
 
 function normalizeCoveragePreference(value: string | undefined): CoveragePreference {
   if (!value) return null;
@@ -725,8 +711,9 @@ api.get('/cotacoes/:guid/resumo', async (c) => {
   }
 
   try {
-    const customer = readCustomerForGuid(guid);
-    const summary = await getQuoteSummary(guid, customer);
+    const ctx = readQuoteContext(guid);
+    const agentName = await getAgentName(ctx?.tenantId ?? '');
+    const summary = await getQuoteSummary(guid, ctx?.info, agentName);
     return c.json(summary);
   } catch (e) {
     return c.json(
@@ -764,7 +751,8 @@ api.post('/jornadas/auto/f1/cotacao', async (c) => {
     const result = await runAutoF1Quote(parsed.data, timeoutMs);
     const fullName = parsed.data.answers.name?.trim() ?? '';
     const firstName = fullName ? fullName.split(/\s+/)[0] : null;
-    cacheCustomerForGuid(result.guid, {
+    // Webchat F1 não tem tenantId no schema atual; cai pra env fallback (ROBOCOTE_AGENT_NAME).
+    cacheQuoteContext(result.guid, {
       firstName,
       coveragePreference: normalizeCoveragePreference(parsed.data.answers.coverage),
     });

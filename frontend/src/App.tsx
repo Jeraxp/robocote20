@@ -216,11 +216,11 @@ function RecommendationStrip({
   onSelectRole: (role: QuoteRecommendation['role']) => void;
 }): JSX.Element {
   return (
-    <section className="recommendation-strip" aria-label="Recomendações Robocote">
+    <section className="recommendation-strip" aria-label={`Recomendações ${summary.agentName}`}>
       <div className="section-heading">
         <Sparkles size={19} />
         <div>
-          <h2>Recomendação Robocote</h2>
+          <h2>Recomendação {summary.agentName}</h2>
           <p>Escolha a lente de decisão para comparar as melhores opções.</p>
         </div>
       </div>
@@ -422,7 +422,7 @@ function ComparisonTable({ options }: { options: QuoteOptionSummary[] }): JSX.El
   );
 }
 
-function OptionDetails({ option }: { option: QuoteOptionSummary }): JSX.Element {
+function OptionDetails({ option, agentName }: { option: QuoteOptionSummary; agentName: string }): JSX.Element {
   const attention =
     option.attentionPoints.length > 0 ? (
       <ul className="attention-list">
@@ -454,7 +454,7 @@ function OptionDetails({ option }: { option: QuoteOptionSummary }): JSX.Element 
           <strong>{formatIntegerMoney(option.franchise)}</strong>
         </div>
         <div>
-          <span>Score Robocote</span>
+          <span>Score {agentName}</span>
           <strong>{option.scores.balance}/100</strong>
           <small className="score-legend">Considera preço, cobertura, franquia e assistência. Acima de 40 já é equilibrado.</small>
         </div>
@@ -494,7 +494,7 @@ function AdvisorPanel({
       <section className="advisor-card recommendation-focus">
         <div className="advisor-title">
           <Star size={21} />
-          <span>Recomendação Robocote</span>
+          <span>Recomendação {summary.agentName}</span>
         </div>
         <h2>{selectedRecommendation.title}</h2>
         <p>{selectedRecommendation.reason}</p>
@@ -505,7 +505,7 @@ function AdvisorPanel({
       <section className="advisor-card insight-list">
         {bullets.map((bullet, index) => {
           const Icon = insightIcons[index] ?? CheckCircle2;
-          const title = insightTitles[index] ?? 'Robocote';
+          const title = insightTitles[index] ?? summary.agentName;
           return (
             <div className="insight-item" key={bullet.slice(0, 24)}>
               <Icon size={28} />
@@ -596,7 +596,7 @@ function QuoteRoom({ summary }: { summary: QuoteSummary }): JSX.Element {
   const generalWaHref = waLink(buildGeneralMessage(summary.customer, summary));
 
   const firstName = summary.customer.firstName?.trim();
-  const heroTitle = firstName ? `Olá, ${firstName}! Sua sala Robocote` : 'Sua sala Robocote';
+  const heroTitle = firstName ? `Olá, ${firstName}! Sua sala ${summary.agentName}` : `Sua sala ${summary.agentName}`;
   const heroSubtitle = firstName
     ? `Separei as melhores opções pra você com prioridade em ${preferenceLabel(summary.customer.coveragePreference)}.`
     : 'Confira as melhores opções para o seu perfil.';
@@ -622,7 +622,7 @@ function QuoteRoom({ summary }: { summary: QuoteSummary }): JSX.Element {
             buildInterestHref={buildInterestHref}
           />
           <ComparisonTable options={primaryOptions} />
-          <OptionDetails option={selectedOption} />
+          <OptionDetails option={selectedOption} agentName={summary.agentName} />
           <AdditionalProducts options={additionalOptions} />
           <p className="legal-note">
             Valores sujeitos à validação final da seguradora. Cotação {summary.quotationId.slice(0, 8)} emitida em{' '}
@@ -692,7 +692,7 @@ export function App(): JSX.Element {
       ) : (
         <LoadingState />
       )}
-      <button type="button" className="floating-chat-button" aria-label="Abrir contato Robocote">
+      <button type="button" className="floating-chat-button" aria-label={summary ? `Abrir contato ${summary.agentName}` : 'Abrir contato'}>
         <MessageCircle size={24} />
       </button>
     </>

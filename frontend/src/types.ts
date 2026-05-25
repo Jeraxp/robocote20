@@ -73,6 +73,8 @@ export interface QuoteSummary {
   source: 'segfy-show-results';
   guid: string;
   quotationId: string;
+  /** Nome do agente exibido no Quote Room (semi-white-label por tenant). */
+  agentName: string;
   quoteDate: string | null;
   validUntil: string | null;
   customer: QuoteCustomerInfo;

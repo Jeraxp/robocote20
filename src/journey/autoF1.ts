@@ -4,6 +4,7 @@ import { createCallbackId, postCalcular, type CalcularPayload, type CalcularResu
 import { openSocket, closeSocket, waitForSocketConnect, type SocketEvent, type SocketSession } from '../segfy/socket.js';
 import { getQuoteSummary, type QuoteSummary } from '../quote/summary.js';
 import { dumpJSON } from '../utils/logger.js';
+import { getTenantQuoteConfig, type CoverageAuto } from '../tenant/quoteConfig.js';
 
 const DEFAULT_QUOTE_TIMEOUT_MS = 45000;
 const MAX_QUOTE_TIMEOUT_MS = 90000;
@@ -281,9 +282,20 @@ function resolveVehicle(answers: AutoF1QuoteRequest['answers']): ResolvedVehicle
   };
 }
 
+/**
+ * Configuração da corretora carregada antes do build do payload.
+ * Vem de `getTenantQuoteConfig(tenantId)`. Quando ausente, runAutoF1Quote
+ * faz fail-fast com erro descritivo — não há mais defaults hardcoded.
+ */
+export interface TenantQuoteContext {
+  coverage: CoverageAuto;
+  insurers: Array<{ name: string; commission: number }>;
+}
+
 export function buildAutoF1Payload(
   request: AutoF1QuoteRequest,
   callbackId: string,
+  tenantContext: TenantQuoteContext,
 ): { payload: CalcularPayload; vehicleProfile: ResolvedVehicleProfile['profile'] } {
   const { answers } = request;
   const reference = buildReference();
@@ -300,10 +312,11 @@ export function buildAutoF1Payload(
   const residenceType = normalizeResidenceType(answers.residence_type);
   const residenceGarage = normalizeGarage(answers.residence_garage);
   const vehicle = resolveVehicle(answers);
+  const coverageBlock = mapAutoCoverageToSegfy(tenantContext.coverage);
 
   const payload: CalcularPayload = {
     config: {
-      insurers: [{ name: 'porto', commission: 10 }],
+      insurers: tenantContext.insurers,
       reference,
       callback: callbackId,
     },
@@ -352,31 +365,44 @@ export function buildAutoF1Payload(
         model_year: vehicle.model_year,
         gas_kit: false,
       },
-      coverage: {
-        franchise: 'normal',
-        coverage_type: 'comprehensive',
-        armored_value: 0,
-        assistance: 'assistance_200_km_referenced',
-        exemption_franchise: false,
-        death_illness: 10000,
-        quick_repairs: false,
-        rental_car_profile: 'no_car',
-        body_injuries: 100000,
-        rental_car: 'no_car',
-        glass: 'glass_basic_referenced',
-        replacement_zero_km: 'no_replacement',
-        moral_damage: 10000,
-        body_shop_repair: false,
-        expense_extraordinary: 0,
-        dmh: 0,
-        material_damage: 100000,
-        gas_kit_value: 0,
-        fipe_percentage: 100,
-      },
+      coverage: coverageBlock,
     },
   };
 
   return { payload, vehicleProfile: vehicle.profile };
+}
+
+/**
+ * Mapeia CoverageAuto (formato amigável do JSON canônico do tenant)
+ * pra bloco `coverage` que vai no payload Segfy.
+ *
+ * Valores enum (franquia/tipo_cobertura/vidros/etc) já vêm normalizados pelo wizard
+ * pra strings que a Segfy aceita. Defaults estáticos (armored, body_shop, etc.) ficam
+ * aqui porque hoje nenhuma corretora customiza esses — quando vier demanda, sobe pra
+ * CoverageAuto.
+ */
+function mapAutoCoverageToSegfy(c: CoverageAuto): Record<string, unknown> {
+  return {
+    franchise: c.franquia,
+    coverage_type: c.tipo_cobertura,
+    armored_value: 0,
+    assistance: c.assistencia_24h,
+    exemption_franchise: c.isencao_franquia,
+    death_illness: c.app_morte,
+    quick_repairs: false,
+    rental_car_profile: c.tipo_carro_reserva,
+    body_injuries: c.rcf_dc,
+    rental_car: c.carro_reserva,
+    glass: c.vidros,
+    replacement_zero_km: c.reposicao_zero_km,
+    moral_damage: c.danos_morais,
+    body_shop_repair: false,
+    expense_extraordinary: c.desp_extras,
+    dmh: 0,
+    material_damage: c.rcf_dm,
+    gas_kit_value: 0,
+    fipe_percentage: c.tabela_fipe,
+  };
 }
 
 function eventAction(event: SocketEvent): string {
@@ -493,11 +519,28 @@ async function getQuoteSummaryWithRetry(guid: string): Promise<QuoteSummary> {
 export async function runAutoF1Quote(
   request: AutoF1QuoteRequest,
   timeoutMs = DEFAULT_QUOTE_TIMEOUT_MS,
+  tenantId?: string,
 ): Promise<AutoF1QuoteRun> {
   const startedAt = Date.now();
   const callbackId = createCallbackId();
   const safeTimeoutMs = Math.min(Math.max(timeoutMs, 5000), MAX_QUOTE_TIMEOUT_MS);
-  const { payload, vehicleProfile } = buildAutoF1Payload(request, callbackId);
+
+  // Carrega config da corretora antes do build. Sem config → fail-fast com erro descritivo.
+  // tenantId padrão pra rpi (compat retroativa enquanto callers não foram totalmente migrados).
+  const effectiveTenantId = (tenantId ?? process.env.ROBOCOTE_TENANT_ID ?? 'rpi').trim();
+  const config = await getTenantQuoteConfig(effectiveTenantId);
+  const coverage = config.coberturas?.auto;
+  if (!coverage) {
+    throw new Error(`Tenant "${effectiveTenantId}" não tem cobertura auto configurada. Complete o onboarding antes de cotar.`);
+  }
+  const seguradoras = config.seguradoras ?? [];
+  const comissaoAuto = config.comissoes?.auto;
+  if (seguradoras.length === 0 || comissaoAuto === undefined) {
+    throw new Error(`Tenant "${effectiveTenantId}" não tem seguradoras/comissão auto configuradas.`);
+  }
+  const insurers = seguradoras.map((name) => ({ name, commission: comissaoAuto }));
+
+  const { payload, vehicleProfile } = buildAutoF1Payload(request, callbackId, { coverage, insurers });
   const session = openSocket(callbackId);
 
   try {

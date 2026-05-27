@@ -748,6 +748,7 @@ api.post('/jornadas/auto/f1/cotacao', async (c) => {
   }
 
   try {
+    // Webchat F1 não tem tenantId no schema atual; cai pra env ROBOCOTE_TENANT_ID (default 'rpi').
     const result = await runAutoF1Quote(parsed.data, timeoutMs);
     const fullName = parsed.data.answers.name?.trim() ?? '';
     const firstName = fullName ? fullName.split(/\s+/)[0] : null;

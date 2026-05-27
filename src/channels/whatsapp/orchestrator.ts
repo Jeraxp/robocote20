@@ -287,7 +287,7 @@ async function triggerCalculate(
 ): Promise<{ guid: string; link: string; topReply: string } | null> {
   try {
     const request: AutoF1QuoteRequest = { answers: answersFromSession(session) };
-    const result = await runAutoF1Quote(request, 45000);
+    const result = await runAutoF1Quote(request, 45000, session.tenantId);
     // Registra contexto da cotação (tenantId + customer) pro Quote Room resolver agent_name dinâmico.
     cacheQuoteContext(
       result.guid,

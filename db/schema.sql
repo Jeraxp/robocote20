@@ -89,6 +89,41 @@ CREATE TABLE IF NOT EXISTS audit_events (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Versionamento do JSON canônico de configuração da corretora.
+-- Insert-only: cada salvamento gera nova linha; tenants.current_config_id aponta pra última ativa.
+-- source distingue origem do salvamento; change_note é nota livre do operador.
+CREATE TABLE IF NOT EXISTS tenant_configs (
+  id           bigserial PRIMARY KEY,
+  tenant_id    text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  config       jsonb NOT NULL,
+  config_hash  text NOT NULL,
+  source       text NOT NULL CHECK (source IN (
+                 'onboarding_initial','panel_edit','admin_override',
+                 'migration','rollback'
+               )),
+  changed_by   text REFERENCES users(id) ON DELETE SET NULL,
+  change_note  text,
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_configs_tenant_created
+  ON tenant_configs (tenant_id, created_at DESC);
+
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS current_config_id bigint
+  REFERENCES tenant_configs(id) ON DELETE SET NULL;
+
+-- Credenciais sensíveis (Segfy etc) criptografadas via AES-256-GCM.
+-- Formato de cada campo: "iv_hex:authTag_hex:ciphertext_b64" (encode em src/tenant/credentials.ts).
+-- Chave de criptografia vem da env CREDENTIAL_ENCRYPTION_KEY (32 bytes em hex).
+CREATE TABLE IF NOT EXISTS tenant_credentials (
+  tenant_id              text PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+  segfy_corretora_token  text,
+  segfy_client_id        text,
+  segfy_client_secret    text,
+  encryption_version     smallint NOT NULL DEFAULT 1,
+  created_at             timestamptz NOT NULL DEFAULT now(),
+  updated_at             timestamptz NOT NULL DEFAULT now()
+);
+
 -- Seed mínimo para desenvolvimento local.
 INSERT INTO tenants (id, slug, name)
 VALUES ('rpi', 'rpi', 'Corretora Piloto RPI')

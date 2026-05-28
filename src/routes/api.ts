@@ -914,3 +914,56 @@ api.patch('/painel/leads/:id/stage', async (c) => {
   const updated = await sessionStore.upsert({ ...session, pipelineStage: stage });
   return c.json({ ok: true, lead: serializeLead(updated) });
 });
+
+/**
+ * Intervenção humana — Camada 2: controle explícito via Painel.
+ *
+ * POST /api/painel/leads/:id/override
+ * Body: { active: true|false, operatorId?: string }
+ *
+ * - active=true: marca humanOverride.active=true (source='panel_explicit'). Agente pausa
+ *   imediatamente para esse lead até desativação manual ou timeout 24h.
+ * - active=false: libera o agente. NÃO manda recap aqui — o recap dispara quando
+ *   o lead enviar a próxima mensagem (mesmo caminho do timeout automático em C1).
+ *
+ * Camada 1 (detecção automática via WhatsApp Web) já funciona em paralelo;
+ * essa rota cobre o caso do operador que prefere usar o Painel sem mandar
+ * mensagem pelo WhatsApp Web antes.
+ */
+api.post('/painel/leads/:id/override', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const id = c.req.param('id');
+  const body = await c.req.json().catch(() => null) as { active?: boolean; operatorId?: string } | null;
+  if (typeof body?.active !== 'boolean') {
+    return c.json({ ok: false, error: 'active (boolean) é obrigatório' }, 400);
+  }
+
+  const auth = resolveAuthContext(c);
+  const sessions = await sessionStore.list(tenantScope(auth));
+  const session = sessions.find((item) => stableLeadId(item) === id);
+  if (!session) {
+    return c.json({ ok: false, error: 'lead não encontrado' }, 404);
+  }
+
+  const now = Date.now();
+  const next: SessionState = body.active
+    ? {
+        ...session,
+        humanOverride: {
+          active: true,
+          startedAt: session.humanOverride?.active ? session.humanOverride.startedAt : now,
+          lastActivityAt: now,
+          source: 'panel_explicit',
+          operatorId: body.operatorId ?? auth.userId ?? undefined,
+        },
+      }
+    : {
+        ...session,
+        humanOverride: null,
+      };
+
+  const updated = await sessionStore.upsert(next);
+  return c.json({ ok: true, lead: serializeLead(updated), humanOverride: updated.humanOverride });
+});

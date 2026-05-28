@@ -320,6 +320,61 @@ export async function getEvolutionConnectionState(instanceName: string): Promise
 }
 
 /**
+ * Cache de mensagens outbound enviadas pelo BOT — usado pra distinguir bot vs operador
+ * humano quando webhook entrega evento com `fromSelf=true`. Se o texto bate com algo
+ * aqui dentro da janela TTL, foi o bot. Se não bate, foi um humano (operador da corretora
+ * mandou via WhatsApp Web, app, ou outro canal vinculado ao mesmo número).
+ *
+ * In-memory por simplicidade — janela TTL é curta (Evolution propaga webhook em segundos).
+ * Restart do container perde o cache; na pior das hipóteses, uma mensagem que o bot mandou
+ * 5min antes do restart vai parecer "humano" — aceitável pro MVP. Se virar problema, migra
+ * pro Redis.
+ *
+ * Estrutura: chave = `${phoneNormalized}::${textNormalized}`. Valor = timestamp expira.
+ */
+const BOT_OUTBOUND_CACHE = new Map<string, number>();
+const BOT_OUTBOUND_TTL_MS = 5 * 60 * 1000; // 5min
+
+function normalizeForCache(text: string): string {
+  return text.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function cacheKey(phone: string, text: string): string {
+  return `${normalizePhone(phone)}::${normalizeForCache(text)}`;
+}
+
+function cleanExpiredOutbound(): void {
+  const now = Date.now();
+  for (const [k, expiresAt] of BOT_OUTBOUND_CACHE.entries()) {
+    if (expiresAt < now) BOT_OUTBOUND_CACHE.delete(k);
+  }
+}
+
+/** Marca que o BOT enviou esse texto pra esse telefone (chamado pelo `sendWhatsappText`). */
+export function markBotSentMessage(toPhone: string, text: string): void {
+  cleanExpiredOutbound();
+  BOT_OUTBOUND_CACHE.set(cacheKey(toPhone, text), Date.now() + BOT_OUTBOUND_TTL_MS);
+}
+
+/**
+ * Verifica se um texto que chegou via webhook `fromSelf=true` foi enviado pelo BOT
+ * (true) ou por um operador humano externo (false). A janela é os últimos 5min.
+ */
+export function wasMessageSentByBot(fromPhone: string, text: string): boolean {
+  cleanExpiredOutbound();
+  const key = cacheKey(fromPhone, text);
+  const expiresAt = BOT_OUTBOUND_CACHE.get(key);
+  if (!expiresAt) return false;
+  if (expiresAt < Date.now()) {
+    BOT_OUTBOUND_CACHE.delete(key);
+    return false;
+  }
+  // Consome o registro pra evitar falso positivo se o operador mandar a MESMA frase depois
+  BOT_OUTBOUND_CACHE.delete(key);
+  return true;
+}
+
+/**
  * Envia mensagem de texto pra um número via Evolution API.
  * Splits longos (> 4096 chars) não tratados aqui — quem chama deve respeitar limite de canal.
  */
@@ -335,6 +390,9 @@ export async function sendWhatsappText(toPhone: string, text: string): Promise<S
   if (!text.trim()) {
     return { ok: false, status: 0, error: 'empty_text' };
   }
+
+  // Marca ANTES do fetch — webhook pode chegar antes da resposta HTTP retornar.
+  markBotSentMessage(phone, text);
 
   try {
     const response = await fetch(sendTextUrl(), {

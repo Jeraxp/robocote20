@@ -28,7 +28,7 @@ import {
   type SessionKey,
 } from '../../session/store.js';
 import type { EvolutionInboundMessage } from './evolution.js';
-import { sendWhatsappText } from './evolution.js';
+import { sendWhatsappText, wasMessageSentByBot } from './evolution.js';
 import { getAgentName } from '../../tenant/agent.js';
 import { cacheQuoteContext } from '../../quote/contextCache.js';
 
@@ -145,6 +145,24 @@ function isResetIntent(message: string, completed: boolean): boolean {
 }
 
 const CALCULATE_IDEMPOTENCY_MS = 60_000;
+/** Tempo máximo sem mensagem outbound do humano antes do bot retomar automaticamente. */
+const HUMAN_OVERRIDE_TIMEOUT_MS = 24 * 60 * 60 * 1000; // 24h
+
+/**
+ * Monta a frase de recapitulação que o bot manda quando o humanOverride expira
+ * (24h sem operador) e a próxima mensagem do lead chega. Identidade silenciosa
+ * preservada — não menciona que houve troca de operador.
+ */
+function buildRecapMessage(
+  session: SessionState,
+  agentName: string,
+  currentPromptForStep: string,
+): string {
+  const firstName = session.customerFirstName?.split(/\s+/)[0]?.trim();
+  const opener = firstName ? `Oi ${firstName}, ${agentName} de volta. ` : `${agentName} de volta. `;
+  const recap = firstName ? `Pra recapitular, continuamos sua cotação.\n\n` : 'Pra recapitular, continuamos sua cotação.\n\n';
+  return `${opener}${recap}${currentPromptForStep}`;
+}
 const PROGRESS_NUDGE_MS = 15_000;
 
 /** Lead avisa que não tem/quer mandar placa ("sem placa", "não tenho", "pular"). */
@@ -320,18 +338,86 @@ async function triggerCalculate(
 export async function processWhatsappTurn(
   inbound: EvolutionInboundMessage,
   options: { tenantId?: string } = {},
-): Promise<{ replySent: string | null; action: AssistantAction | 'greet' | 'calc_failed' | 'reset'; sessionAfter: SessionState | null }> {
-  if (inbound.fromSelf) {
-    return { replySent: null, action: 'none', sessionAfter: null };
-  }
-
+): Promise<{ replySent: string | null; action: AssistantAction | 'greet' | 'calc_failed' | 'reset' | 'human_intervention' | 'human_paused' | 'human_handoff_back'; sessionAfter: SessionState | null }> {
   const tenantId = options.tenantId ?? ROBOCOTE_TENANT_ID;
   const key: SessionKey = { tenantId, channel: 'whatsapp', channelUserId: inbound.fromPhone };
+
+  // ─── fromSelf=true: precisa distinguir o BOT (ignorar) do OPERADOR HUMANO (pausar agente) ──
+  // Bot registra cada outbound num cache (5min TTL); se o texto não bate, é operador.
+  if (inbound.fromSelf) {
+    if (wasMessageSentByBot(inbound.fromPhone, inbound.text)) {
+      // Foi o próprio bot — comportamento histórico, ignora.
+      return { replySent: null, action: 'none', sessionAfter: null };
+    }
+    // Operador humano mandou pelo WhatsApp Web/app vinculado ao mesmo número.
+    // Marca humanOverride pra agente pausar; só faz sentido se já existe sessão.
+    const existing = await sessionStore.get(key);
+    if (!existing) {
+      return { replySent: null, action: 'none', sessionAfter: null };
+    }
+    const now = Date.now();
+    const overrideUpdated: SessionState = {
+      ...existing,
+      humanOverride: {
+        active: true,
+        startedAt: existing.humanOverride?.active ? existing.humanOverride.startedAt : now,
+        lastActivityAt: now,
+        source: existing.humanOverride?.source ?? 'auto_detected',
+        operatorId: existing.humanOverride?.operatorId,
+      },
+    };
+    const withInteraction = appendSessionInteraction(overrideUpdated, {
+      direction: 'outbound',
+      text: inbound.text,
+      action: 'human_intervention',
+    });
+    const persisted = await sessionStore.upsert(withInteraction);
+    return { replySent: null, action: 'human_intervention', sessionAfter: persisted };
+  }
 
   let session = await sessionStore.get(key);
   const isNew = !session;
   if (!session) {
     session = await sessionStore.upsert(createInitialSessionState(key));
+  }
+
+  // ─── Guarda de humanOverride: lead manda mensagem com operador ativo ─────────
+  if (session.humanOverride?.active) {
+    const idleMs = Date.now() - session.humanOverride.lastActivityAt;
+    if (idleMs < HUMAN_OVERRIDE_TIMEOUT_MS) {
+      // Pausado — só registra a mensagem, não processa nem responde.
+      const persisted = await sessionStore.upsert(
+        appendSessionInteraction(session, {
+          direction: 'inbound',
+          text: inbound.text,
+          action: 'human_paused',
+        }),
+      );
+      return { replySent: null, action: 'human_paused', sessionAfter: persisted };
+    }
+    // Timeout vencido (24h sem outbound humano): bot retoma com recapitulação.
+    // Não processa o conteúdo da mensagem atual — só manda o recap e espera a próxima.
+    const agentName = await getAgentName(tenantId);
+    const currentStep = session.stepId === 'complete' ? 'quote_link' : session.stepId;
+    const stepPrompt = STEP_PROMPT[currentStep as StepId] ?? 'Pode continuar de onde paramos?';
+    const recap = buildRecapMessage(session, agentName, stepPrompt);
+    await sendWhatsappText(inbound.fromPhone, recap);
+    const cleared: SessionState = { ...session, humanOverride: null };
+    const persisted = await sessionStore.upsert(
+      appendSessionInteraction(
+        appendSessionInteraction(cleared, {
+          direction: 'inbound',
+          text: inbound.text,
+          action: 'human_handoff_back',
+        }),
+        {
+          direction: 'outbound',
+          text: recap,
+          action: 'human_handoff_back',
+        },
+      ),
+    );
+    return { replySent: recap, action: 'human_handoff_back', sessionAfter: persisted };
   }
 
   // Primeira mensagem: envia saudação e fica aguardando o nome.

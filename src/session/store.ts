@@ -79,6 +79,27 @@ export interface PendingPlateConfirmation {
   finalOffer: boolean;
 }
 
+/**
+ * Estado de intervenção humana — quando operador da corretora assume conversa
+ * (via WhatsApp Web ou comando explícito no painel). Enquanto `active=true`,
+ * o agente IA NÃO responde nada — só registra mensagens do lead no histórico.
+ *
+ * Retomada automática: depois de 24h sem mensagem outbound do humano, o bot
+ * volta com mensagem de recapitulação.
+ *
+ * Retomada manual: operador clica "Devolver pro Bot" no painel.
+ */
+export interface HumanOverride {
+  active: boolean;
+  startedAt: number;
+  /** Timestamp da última mensagem outbound do humano (usado pra timeout 24h). */
+  lastActivityAt: number;
+  /** Origem: 'auto_detected' (via outbound não-bot) | 'panel_explicit' (botão no painel). */
+  source: 'auto_detected' | 'panel_explicit';
+  /** Quando preenchido, identifica qual operador assumiu (panel_explicit). */
+  operatorId?: string;
+}
+
 export interface SessionInteraction {
   id: string;
   at: number;
@@ -109,6 +130,9 @@ export interface SessionState {
 
   /** Placa que falhou decode aguardando confirmação ou correção pelo lead. */
   pendingPlateConfirmation: PendingPlateConfirmation | null;
+
+  /** Operador humano assumiu conversa — bot pausa até timeout/devolução manual. */
+  humanOverride: HumanOverride | null;
 
   lastGuid: string | null;
   /** Timestamp do último calculate disparado — usado pra idempotência (lock 60s). */
@@ -154,6 +178,7 @@ export function createInitialSessionState(key: SessionKey): SessionState {
     coveragePreference: null,
     pendingProposal: null,
     pendingPlateConfirmation: null,
+    humanOverride: null,
     lastGuid: null,
     lastCalculateAt: null,
     createdAt: now,

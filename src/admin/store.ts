@@ -50,6 +50,9 @@ export interface CreateUserInput {
   email: string;
   phone?: string;
   role: 'admin' | 'operador';
+  /** Hash de senha (scrypt) já calculado pela rota. Quando presente, usuário nasce ativo
+   *  com troca obrigatória no 1º acesso. Quando ausente, mantém comportamento legado (invited). */
+  passwordHash?: string;
 }
 
 export interface WhatsappInstanceRecord {
@@ -431,16 +434,22 @@ class PostgresAdminStore implements AdminStore {
       if (!tenantCheck.rowCount) throw new Error('corretora não encontrada');
 
       const userId = userIdFromEmail(input.email);
+      // Com senha definida: usuário nasce 'active' + troca obrigatória no 1º acesso.
+      // Sem senha: comportamento legado ('invited', sem hash).
+      const initialStatus = input.passwordHash ? 'active' : 'invited';
+      const mustChange = Boolean(input.passwordHash);
       const userResult = await client.query(`
-        insert into users (id, name, email, phone, status)
-        values ($1, $2, $3, $4, 'invited')
+        insert into users (id, name, email, phone, status, password_hash, must_change_password)
+        values ($1, $2, $3, $4, $5, $6, $7)
         on conflict (email) do update set
           name = excluded.name,
           phone = excluded.phone,
-          status = case when users.status = 'disabled' then 'invited' else users.status end,
+          status = case when users.status = 'disabled' then excluded.status else users.status end,
+          password_hash = coalesce(excluded.password_hash, users.password_hash),
+          must_change_password = case when excluded.password_hash is not null then true else users.must_change_password end,
           updated_at = now()
         returning *
-      `, [userId, input.name, input.email, digitsOnly(input.phone ?? '') || null]);
+      `, [userId, input.name, input.email, digitsOnly(input.phone ?? '') || null, initialStatus, input.passwordHash ?? null, mustChange]);
 
       const createdId = String(userResult.rows[0].id);
       await client.query(`

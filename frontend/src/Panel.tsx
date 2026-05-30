@@ -177,6 +177,7 @@ interface UserForm {
   email: string;
   phone: string;
   role: 'admin' | 'operador';
+  password: string;
 }
 
 interface WhatsappForm {
@@ -1068,6 +1069,18 @@ function UsersSection({
             </select>
           </label>
 
+          <label>
+            Senha inicial
+            <input
+              value={values.password}
+              onChange={(event) => update('password', event.target.value)}
+              placeholder="Mín. 6 caracteres — o usuário troca no 1º acesso"
+              type="text"
+              minLength={6}
+              required
+            />
+          </label>
+
           {error ? <p className="manual-lead-error">{error}</p> : null}
 
           <div className="manual-lead-actions">
@@ -1635,6 +1648,7 @@ export function Panel(): JSX.Element {
     email: '',
     phone: '',
     role: 'operador',
+    password: '',
   });
   const [whatsappInstances, setWhatsappInstances] = useState<AdminWhatsappInstance[]>([]);
   const [whatsappLoading, setWhatsappLoading] = useState(false);
@@ -1878,6 +1892,7 @@ export function Panel(): JSX.Element {
         email: '',
         phone: '',
         role: admin?.auth.isSuperadmin ? current.role : 'operador',
+        password: '',
       }));
       await refreshUsers();
     } catch (e) {

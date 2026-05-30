@@ -787,6 +787,7 @@ api.post('/admin/users', async (c) => {
     email?: string;
     phone?: string;
     role?: string;
+    password?: string;
   } | null;
 
   const tenantId = auth.isSuperadmin
@@ -798,6 +799,7 @@ api.post('/admin/users', async (c) => {
   const phone = typeof body?.phone === 'string' && body.phone.trim()
     ? normalizeManualPhone(body.phone)
     : '';
+  const password = typeof body?.password === 'string' ? body.password : '';
 
   if (!tenantId) return c.json({ ok: false, error: 'tenant da corretora é obrigatório' }, 400);
   if (!name) return c.json({ ok: false, error: 'nome do usuário é obrigatório' }, 400);
@@ -806,16 +808,21 @@ api.post('/admin/users', async (c) => {
   if (!auth.isSuperadmin && role !== 'operador') {
     return c.json({ ok: false, error: 'gestor só pode cadastrar operadores' }, 403);
   }
+  if (password && password.length < 6) {
+    return c.json({ ok: false, error: 'senha inicial deve ter ao menos 6 caracteres' }, 400);
+  }
 
   try {
+    const passwordHash = password ? await hashPassword(password) : undefined;
     const user = await adminStore.createUser(auth, {
       tenantId,
       name,
       email,
       phone: phone || undefined,
       role,
+      passwordHash,
     });
-    return c.json({ ok: true, user }, 201);
+    return c.json({ ok: true, user, passwordSet: Boolean(passwordHash) }, 201);
   } catch (e) {
     return c.json({ ok: false, error: (e as Error).message }, 409);
   }

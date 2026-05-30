@@ -91,7 +91,9 @@ interface PanelAuth {
   tenantId: string | null;
   tenantName: string | null;
   isSuperadmin: boolean;
-  authMode: 'dev';
+  authMode: 'dev' | 'session';
+  impersonatingTenantId?: string | null;
+  mustChangePassword?: boolean;
 }
 
 interface AdminTenant {
@@ -301,6 +303,50 @@ async function fetchAdminMe(token: string): Promise<AdminMeResponse> {
   return parsePanelResponse<AdminMeResponse>(response, 'Não foi possível carregar permissões.');
 }
 
+async function loginRequest(email: string, password: string): Promise<void> {
+  const response = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  const body = await response.json().catch(() => ({ ok: false }));
+  if (!response.ok || !body.ok) {
+    throw new Error(body.error ?? 'Não foi possível entrar.');
+  }
+}
+
+async function logoutRequest(): Promise<void> {
+  await fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
+}
+
+async function changePasswordRequest(currentPassword: string, newPassword: string): Promise<void> {
+  const response = await fetch('/api/auth/change-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+  const body = await response.json().catch(() => ({ ok: false }));
+  if (!response.ok || !body.ok) {
+    throw new Error(body.error ?? 'Não foi possível trocar a senha.');
+  }
+}
+
+async function impersonateRequest(tenantId: string): Promise<void> {
+  const response = await fetch('/api/auth/impersonate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tenantId }),
+  });
+  const body = await response.json().catch(() => ({ ok: false }));
+  if (!response.ok || !body.ok) {
+    throw new Error(body.error ?? 'Não foi possível acessar o painel da corretora.');
+  }
+}
+
+async function stopImpersonateRequest(): Promise<void> {
+  await fetch('/api/auth/stop-impersonate', { method: 'POST' }).catch(() => undefined);
+}
+
 async function fetchAdminUsers(token: string): Promise<AdminUser[]> {
   const response = await panelFetch('/api/admin/users', token);
   const body = await parsePanelResponse<{ ok: true; users: AdminUser[] }>(response, 'Não foi possível carregar usuários.');
@@ -385,17 +431,21 @@ function MetricCard({
   );
 }
 
-function PanelAccessGate({
-  value,
+function LoginScreen({
+  email,
+  password,
   loading,
   error,
-  onChange,
+  onEmailChange,
+  onPasswordChange,
   onSubmit,
 }: {
-  value: string;
+  email: string;
+  password: string;
   loading: boolean;
   error: string | null;
-  onChange: (value: string) => void;
+  onEmailChange: (value: string) => void;
+  onPasswordChange: (value: string) => void;
   onSubmit: () => void;
 }): JSX.Element {
   return (
@@ -406,8 +456,8 @@ function PanelAccessGate({
         </div>
         <div>
           <span>Painel Robocote</span>
-          <h1>Acesso operacional</h1>
-          <p>Informe o token do painel para abrir leads, corretoras, usuários e conexões WhatsApp.</p>
+          <h1>Entrar</h1>
+          <p>Acesse com seu e-mail e senha para abrir o painel da sua corretora.</p>
         </div>
         <form
           className="panel-access-form"
@@ -417,19 +467,85 @@ function PanelAccessGate({
           }}
         >
           <label>
-            Token do painel
+            E-mail
             <input
-              value={value}
-              onChange={(event) => onChange(event.target.value)}
-              placeholder="Cole o token de acesso"
+              value={email}
+              onChange={(event) => onEmailChange(event.target.value)}
+              placeholder="voce@suacorretora.com"
               autoFocus
+              type="email"
+              autoComplete="username"
+            />
+          </label>
+          <label>
+            Senha
+            <input
+              value={password}
+              onChange={(event) => onPasswordChange(event.target.value)}
+              placeholder="Sua senha"
               type="password"
+              autoComplete="current-password"
             />
           </label>
           {error ? <p>{error}</p> : null}
           <button type="submit" className="panel-refresh" disabled={loading}>
             {loading ? <RefreshCw size={17} /> : <ShieldCheck size={17} />}
             Entrar
+          </button>
+        </form>
+      </section>
+    </main>
+  );
+}
+
+/** Tela de troca obrigatória de senha (primeiro acesso com senha temporária). */
+function ChangePasswordScreen({
+  newPassword,
+  confirmPassword,
+  loading,
+  error,
+  onNewChange,
+  onConfirmChange,
+  onSubmit,
+}: {
+  newPassword: string;
+  confirmPassword: string;
+  loading: boolean;
+  error: string | null;
+  onNewChange: (v: string) => void;
+  onConfirmChange: (v: string) => void;
+  onSubmit: () => void;
+}): JSX.Element {
+  return (
+    <main className="panel-access-shell">
+      <section className="panel-access-card">
+        <div className="panel-access-icon">
+          <ShieldCheck size={28} />
+        </div>
+        <div>
+          <span>Primeiro acesso</span>
+          <h1>Defina sua senha</h1>
+          <p>Por segurança, escolha uma senha nova antes de continuar.</p>
+        </div>
+        <form
+          className="panel-access-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSubmit();
+          }}
+        >
+          <label>
+            Nova senha
+            <input value={newPassword} onChange={(e) => onNewChange(e.target.value)} type="password" autoComplete="new-password" autoFocus />
+          </label>
+          <label>
+            Confirme a nova senha
+            <input value={confirmPassword} onChange={(e) => onConfirmChange(e.target.value)} type="password" autoComplete="new-password" />
+          </label>
+          {error ? <p>{error}</p> : null}
+          <button type="submit" className="panel-refresh" disabled={loading}>
+            {loading ? <RefreshCw size={17} /> : <ShieldCheck size={17} />}
+            Salvar e entrar
           </button>
         </form>
       </section>
@@ -791,10 +907,12 @@ function PanelSidebar({
   admin,
   active,
   onSelect,
+  onLogout,
 }: {
   admin: AdminMeResponse | null;
   active: PanelSection;
   onSelect: (section: PanelSection) => void;
+  onLogout: () => void;
 }): JSX.Element {
   const nav = admin?.navigation ?? [
     { key: 'leads' as const, label: 'Leads / CRM', enabled: true },
@@ -833,7 +951,12 @@ function PanelSidebar({
 
       <div className="panel-sidebar-footer">
         <span>{admin?.auth.email ?? 'dev mode'}</span>
-        <small>Auth alpha · escopo por tenant</small>
+        <small>{admin ? roleLabel(admin.auth.role) : 'Auth alpha'}</small>
+        {admin?.auth.authMode === 'session' ? (
+          <button type="button" className="panel-logout-btn" onClick={onLogout}>
+            <X size={15} /> Sair
+          </button>
+        ) : null}
       </div>
     </aside>
   );
@@ -999,6 +1122,7 @@ function TenantsSection({
   onChange,
   onSubmit,
   onRefresh,
+  onImpersonate,
 }: {
   tenants: AdminTenant[];
   values: TenantForm;
@@ -1008,6 +1132,7 @@ function TenantsSection({
   onChange: (values: TenantForm) => void;
   onSubmit: () => void;
   onRefresh: () => void;
+  onImpersonate: (tenantId: string) => void;
 }): JSX.Element {
   const update = (key: keyof TenantForm, value: string): void => {
     onChange({ ...values, [key]: value });
@@ -1145,6 +1270,7 @@ function TenantsSection({
               <th>Gestor</th>
               <th>Tenant</th>
               <th>Status</th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody>
@@ -1159,6 +1285,11 @@ function TenantsSection({
                 </td>
                 <td>{tenant.id}</td>
                 <td>{tenant.status}</td>
+                <td>
+                  <button type="button" className="tenant-access-btn" onClick={() => onImpersonate(tenant.id)}>
+                    <ExternalLink size={14} /> Acessar painel
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -1465,11 +1596,16 @@ function SettingsSection({ token }: { token: string }): JSX.Element {
 
 export function Panel(): JSX.Element {
   const [activeSection, setActiveSection] = useState<PanelSection>('leads');
-  const [panelToken, setPanelToken] = useState(readStoredPanelToken);
-  const [accessInput, setAccessInput] = useState(readStoredPanelToken);
+  const [panelToken] = useState(readStoredPanelToken);
   const [accessRequired, setAccessRequired] = useState(false);
   const [accessLoading, setAccessLoading] = useState(false);
   const [accessError, setAccessError] = useState<string | null>(null);
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [changePwError, setChangePwError] = useState<string | null>(null);
+  const [changePwLoading, setChangePwLoading] = useState(false);
   const [admin, setAdmin] = useState<AdminMeResponse | null>(null);
   const [data, setData] = useState<PanelResponse | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1808,55 +1944,126 @@ export function Panel(): JSX.Element {
     }
   }
 
-  async function submitPanelToken(): Promise<void> {
-    const nextToken = accessInput.trim();
-    if (!nextToken) {
-      setAccessError('Informe o token para abrir o painel.');
+  async function submitLogin(): Promise<void> {
+    const email = loginEmail.trim();
+    if (!email || !loginPassword) {
+      setAccessError('Informe e-mail e senha.');
       return;
     }
-
     setAccessLoading(true);
     setAccessError(null);
     try {
+      await loginRequest(email, loginPassword);
+      // Cookie de sessão já setado; bootstrap usa ele automaticamente.
       const [nextAdmin, nextData] = await Promise.all([
-        fetchAdminMe(nextToken),
-        fetchPanelLeads(nextToken),
+        fetchAdminMe(''),
+        fetchPanelLeads(''),
       ]);
-      persistPanelToken(nextToken);
-      setPanelToken(nextToken);
       setAdmin(nextAdmin);
       setTenants(nextAdmin.tenants);
       setData(nextData);
+      setLoginPassword('');
       setAccessRequired(false);
       setAccessError(null);
     } catch (e) {
-      if (e instanceof PanelAccessError) {
-        setAccessRequired(true);
-        setAccessError('Token inválido ou ausente.');
-      } else {
-        setAccessError((e as Error).message);
-      }
+      setAccessError((e as Error).message);
     } finally {
       setAccessLoading(false);
     }
   }
 
+  async function submitLogout(): Promise<void> {
+    await logoutRequest();
+    setAdmin(null);
+    setData(null);
+    setAccessRequired(true);
+    setLoginEmail('');
+    setLoginPassword('');
+  }
+
+  async function submitChangePassword(): Promise<void> {
+    if (newPassword.length < 6) {
+      setChangePwError('A nova senha precisa ter ao menos 6 caracteres.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setChangePwError('As senhas não conferem.');
+      return;
+    }
+    setChangePwLoading(true);
+    setChangePwError(null);
+    try {
+      // currentPassword = a senha usada no login (ainda em memória)
+      await changePasswordRequest(loginPassword || '', newPassword);
+      await refreshAdmin('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setLoginPassword('');
+    } catch (e) {
+      setChangePwError((e as Error).message);
+    } finally {
+      setChangePwLoading(false);
+    }
+  }
+
+  async function doImpersonate(tenantId: string): Promise<void> {
+    try {
+      await impersonateRequest(tenantId);
+      await Promise.all([refreshAdmin(''), refresh('')]);
+      setActiveSection('leads');
+    } catch (e) {
+      setAdminError((e as Error).message);
+    }
+  }
+
+  async function doStopImpersonate(): Promise<void> {
+    await stopImpersonateRequest();
+    await Promise.all([refreshAdmin(''), refresh('')]);
+  }
+
   if (accessRequired) {
     return (
-      <PanelAccessGate
-        value={accessInput}
+      <LoginScreen
+        email={loginEmail}
+        password={loginPassword}
         loading={accessLoading}
         error={accessError}
-        onChange={setAccessInput}
-        onSubmit={() => void submitPanelToken()}
+        onEmailChange={setLoginEmail}
+        onPasswordChange={setLoginPassword}
+        onSubmit={() => void submitLogin()}
       />
     );
   }
 
+  if (admin?.auth.mustChangePassword) {
+    return (
+      <ChangePasswordScreen
+        newPassword={newPassword}
+        confirmPassword={confirmPassword}
+        loading={changePwLoading}
+        error={changePwError}
+        onNewChange={setNewPassword}
+        onConfirmChange={setConfirmPassword}
+        onSubmit={() => void submitChangePassword()}
+      />
+    );
+  }
+
+  const impersonating = admin?.auth.impersonatingTenantId ?? null;
+  const impersonatingName = impersonating
+    ? (tenants.find((t) => t.id === impersonating)?.name ?? impersonating)
+    : null;
+
   return (
     <main className="panel-app-shell">
-      <PanelSidebar admin={admin} active={activeSection} onSelect={setActiveSection} />
+      <PanelSidebar admin={admin} active={activeSection} onSelect={setActiveSection} onLogout={() => void submitLogout()} />
       <section className="panel-shell">
+        {impersonating ? (
+          <div className="impersonation-banner">
+            <span>👁️ Você está vendo o painel de <strong>{impersonatingName}</strong> (modo suporte).</span>
+            <button type="button" onClick={() => void doStopImpersonate()}>Sair da visão</button>
+          </div>
+        ) : null}
         {adminError ? <p className="panel-admin-warning">{adminError}</p> : null}
         {activeSection === 'leads' ? (
           <>
@@ -1961,6 +2168,7 @@ export function Panel(): JSX.Element {
             onChange={setTenantForm}
             onSubmit={() => void submitTenant()}
             onRefresh={() => void refreshTenants()}
+            onImpersonate={(tenantId) => void doImpersonate(tenantId)}
           />
         ) : activeSection === 'users' ? (
           <UsersSection

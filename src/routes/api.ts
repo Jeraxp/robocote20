@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { createHash, timingSafeEqual } from 'crypto';
 import type { Context } from 'hono';
 import { adminStore } from '../admin/store.js';
@@ -10,6 +11,18 @@ import {
   tenantScope,
   writableTenantId,
 } from '../auth/context.js';
+import { authMiddleware } from '../auth/middleware.js';
+import { hashPassword, verifyPassword } from '../auth/password.js';
+import {
+  findUserForLogin,
+  createSession,
+  deleteSession,
+  setSessionImpersonation,
+  resolveSession,
+  authConfigured,
+  SESSION_COOKIE,
+} from '../auth/session.js';
+import { getPostgresPool } from '../db/postgres.js';
 import { getQuoteSummary, type QuoteCustomerInfo, type CoveragePreference } from '../quote/summary.js';
 import { cacheQuoteContext, readQuoteContext } from '../quote/contextCache.js';
 import { getAgentName } from '../tenant/agent.js';
@@ -38,6 +51,13 @@ import {
 
 export const api = new Hono();
 
+// Resolve sessão real (login) e injeta AuthContext antes de qualquer handler.
+api.use('*', authMiddleware);
+
+const COOKIE_SECURE = process.env.NODE_ENV === 'production';
+/** Quando '1', desabilita o fallback de token de painel — só login real é aceito. */
+const TOKEN_AUTH_DISABLED = process.env.ROBOCOTE_DISABLE_TOKEN_AUTH === '1';
+
 function secureTokenEquals(candidate: string, expected: string): boolean {
   const candidateHash = createHash('sha256').update(candidate).digest();
   const expectedHash = createHash('sha256').update(expected).digest();
@@ -56,18 +76,201 @@ function readPanelToken(c: Context): string {
 }
 
 function requirePanelAccess(c: Context): Response | null {
-  const expected = process.env.ROBOCOTE_PANEL_TOKEN?.trim();
-  if (!expected) return null;
+  // 1. Sessão real (login) injetada pelo authMiddleware — caminho normal.
+  const auth = resolveAuthContext(c);
+  if (auth.authMode === 'session') return null;
 
-  const token = readPanelToken(c);
-  if (token && secureTokenEquals(token, expected)) return null;
+  // 2. Fallback dev/local: token de painel (a menos que explicitamente desabilitado).
+  if (!TOKEN_AUTH_DISABLED) {
+    const expected = process.env.ROBOCOTE_PANEL_TOKEN?.trim();
+    if (!expected) return null; // sem token configurado = alpha aberto (dev local)
+    const token = readPanelToken(c);
+    if (token && secureTokenEquals(token, expected)) return null;
+  }
 
   return c.json({
     ok: false,
     authRequired: true,
-    error: 'acesso ao painel requer token',
+    error: 'acesso ao painel requer login',
   }, 401);
 }
+
+// ─── Autenticação real (login + sessão server-side) ─────────────────────────
+const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1),
+});
+
+function setSessionCookie(c: Context, sessionId: string): void {
+  setCookie(c, SESSION_COOKIE, sessionId, {
+    httpOnly: true,
+    secure: COOKIE_SECURE,
+    sameSite: 'Lax',
+    path: '/',
+    maxAge: 7 * 24 * 60 * 60,
+  });
+}
+
+/** Registra evento de auditoria (best-effort — não derruba o fluxo se falhar). */
+async function recordAuditEvent(input: {
+  tenantId: string | null;
+  actorUserId: string | null;
+  action: string;
+  entityType: string;
+  entityId?: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  if (!authConfigured()) return;
+  try {
+    await getPostgresPool().query(
+      `insert into audit_events (tenant_id, actor_user_id, action, entity_type, entity_id, metadata)
+       values ($1, $2, $3, $4, $5, $6::jsonb)`,
+      [input.tenantId, input.actorUserId, input.action, input.entityType, input.entityId ?? null, JSON.stringify(input.metadata ?? {})],
+    );
+  } catch {
+    // auditoria é best-effort; não interrompe a ação principal
+  }
+}
+
+api.post('/auth/login', async (c) => {
+  if (!authConfigured()) {
+    return c.json({ ok: false, error: 'login indisponível (Postgres não configurado)' }, 503);
+  }
+  const raw = await c.req.json().catch(() => null);
+  const parsed = loginSchema.safeParse(raw);
+  if (!parsed.success) {
+    return c.json({ ok: false, error: 'email e senha são obrigatórios' }, 400);
+  }
+
+  const user = await findUserForLogin(parsed.data.email);
+  // Mensagem genérica pra não revelar se o email existe (anti-enumeração).
+  const invalid = () => c.json({ ok: false, error: 'email ou senha inválidos' }, 401);
+  if (!user) return invalid();
+  const ok = await verifyPassword(parsed.data.password, user.passwordHash);
+  if (!ok) return invalid();
+
+  const sessionId = await createSession(user.userId, {
+    ip: c.req.header('x-forwarded-for') ?? undefined,
+    userAgent: c.req.header('user-agent') ?? undefined,
+  });
+  setSessionCookie(c, sessionId);
+
+  return c.json({
+    ok: true,
+    user: {
+      userId: user.userId,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      tenantId: user.tenantId,
+      mustChangePassword: user.mustChangePassword,
+    },
+  });
+});
+
+api.post('/auth/logout', async (c) => {
+  const sessionId = getCookie(c, SESSION_COOKIE);
+  if (sessionId) await deleteSession(sessionId).catch(() => undefined);
+  deleteCookie(c, SESSION_COOKIE, { path: '/' });
+  return c.json({ ok: true });
+});
+
+api.get('/auth/me', async (c) => {
+  const auth = resolveAuthContext(c);
+  if (auth.authMode !== 'session') {
+    return c.json({ ok: false, authRequired: true, error: 'não autenticado' }, 401);
+  }
+  return c.json({
+    ok: true,
+    user: {
+      userId: auth.userId,
+      name: auth.name,
+      email: auth.email,
+      role: auth.role,
+      tenantId: auth.tenantId,
+      isSuperadmin: auth.isSuperadmin,
+      impersonatingTenantId: auth.impersonatingTenantId ?? null,
+      mustChangePassword: auth.mustChangePassword ?? false,
+    },
+  });
+});
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(6),
+});
+
+api.post('/auth/change-password', async (c) => {
+  const auth = resolveAuthContext(c);
+  if (auth.authMode !== 'session') {
+    return c.json({ ok: false, authRequired: true, error: 'não autenticado' }, 401);
+  }
+  const raw = await c.req.json().catch(() => null);
+  const parsed = changePasswordSchema.safeParse(raw);
+  if (!parsed.success) {
+    return c.json({ ok: false, error: 'senha atual e nova (mín. 6 chars) obrigatórias' }, 400);
+  }
+
+  const result = await getPostgresPool().query<{ password_hash: string | null }>(
+    'select password_hash from users where id = $1 limit 1',
+    [auth.userId],
+  );
+  const ok = await verifyPassword(parsed.data.currentPassword, result.rows[0]?.password_hash);
+  if (!ok) return c.json({ ok: false, error: 'senha atual incorreta' }, 401);
+
+  const newHash = await hashPassword(parsed.data.newPassword);
+  await getPostgresPool().query(
+    'update users set password_hash = $1, must_change_password = false, updated_at = now() where id = $2',
+    [newHash, auth.userId],
+  );
+  return c.json({ ok: true });
+});
+
+// ─── Impersonation: superadmin "vira" uma corretora pra dar suporte ──────────
+const impersonateSchema = z.object({ tenantId: z.string().min(1) });
+
+api.post('/auth/impersonate', async (c) => {
+  const auth = resolveAuthContext(c);
+  if (auth.authMode !== 'session' || !auth.isSuperadmin) {
+    return c.json({ ok: false, error: 'apenas superadmin pode acessar painéis de corretoras' }, 403);
+  }
+  const raw = await c.req.json().catch(() => null);
+  const parsed = impersonateSchema.safeParse(raw);
+  if (!parsed.success) return c.json({ ok: false, error: 'tenantId obrigatório' }, 400);
+
+  // valida que o tenant existe
+  const exists = await getPostgresPool().query('select 1 from tenants where id = $1 limit 1', [parsed.data.tenantId]);
+  if (exists.rowCount === 0) return c.json({ ok: false, error: 'corretora não encontrada' }, 404);
+
+  await setSessionImpersonation(auth.sessionId ?? '', parsed.data.tenantId);
+  await recordAuditEvent({
+    tenantId: parsed.data.tenantId,
+    actorUserId: auth.userId,
+    action: 'impersonate_start',
+    entityType: 'tenant',
+    entityId: parsed.data.tenantId,
+  });
+
+  return c.json({ ok: true, impersonatingTenantId: parsed.data.tenantId });
+});
+
+api.post('/auth/stop-impersonate', async (c) => {
+  const auth = resolveAuthContext(c);
+  if (auth.authMode !== 'session') {
+    return c.json({ ok: false, authRequired: true, error: 'não autenticado' }, 401);
+  }
+  if (auth.sessionId) await setSessionImpersonation(auth.sessionId, null);
+  if (auth.impersonatingTenantId) {
+    await recordAuditEvent({
+      tenantId: auth.impersonatingTenantId,
+      actorUserId: auth.userId,
+      action: 'impersonate_stop',
+      entityType: 'tenant',
+      entityId: auth.impersonatingTenantId,
+    });
+  }
+  return c.json({ ok: true });
+});
 
 // Cache movido pra src/quote/contextCache.ts (compartilhado com orchestrator WhatsApp).
 
@@ -448,7 +651,9 @@ api.get('/admin/me', async (c) => {
   if (denied) return denied;
 
   const auth = resolveAuthContext(c);
-  const tenants = await adminStore.listTenants(auth);
+  // Superadmin impersonando vê todos os tenants (pra poder trocar); senão escopo normal.
+  const listAuth = auth.isSuperadmin ? { ...auth, tenantId: null } : auth;
+  const tenants = await adminStore.listTenants(listAuth);
   return c.json({
     ok: true,
     auth,

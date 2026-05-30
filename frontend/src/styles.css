@@ -3084,3 +3084,60 @@ td {
   border-color: #9fe0bf;
   color: #11794c;
 }
+
+/* ─── Login / Impersonation / Logout ─────────────────────────────────── */
+.impersonation-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: #fff6e6;
+  border: 1px solid #f5b73d;
+  color: #8a5a00;
+  font-size: 0.88rem;
+}
+.impersonation-banner button {
+  border: 1px solid #f5b73d;
+  background: #fff;
+  color: #8a5a00;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-weight: 600;
+  font-size: 0.82rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.impersonation-banner button:hover { background: #fff0d6; }
+.panel-logout-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted-strong);
+  font-weight: 600;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.panel-logout-btn:hover { border-color: var(--orange); color: var(--orange-dark); }
+.tenant-access-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border: 1px solid var(--orange);
+  border-radius: 8px;
+  background: var(--blue-soft);
+  color: var(--orange-dark);
+  font-weight: 600;
+  font-size: 0.8rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tenant-access-btn:hover { background: var(--orange); color: #fff; }

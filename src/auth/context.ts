@@ -10,7 +10,13 @@ export interface AuthContext {
   tenantId: string | null;
   tenantName: string | null;
   isSuperadmin: boolean;
-  authMode: 'dev';
+  authMode: 'dev' | 'session';
+  /** Sessão real (auth_sessions.id) quando autenticado por login; null em modo dev. */
+  sessionId?: string | null;
+  /** Quando superadmin está impersonando uma corretora, o tenant real assumido. */
+  impersonatingTenantId?: string | null;
+  /** Indica que o usuário precisa trocar a senha temporária antes de usar o painel. */
+  mustChangePassword?: boolean;
 }
 
 const DEFAULT_TENANT_ID = process.env.ROBOCOTE_TENANT_ID?.trim() || 'rpi';
@@ -26,13 +32,32 @@ function headerOrEnv(c: Context, header: string, env: string, fallback: string):
   return c.req.header(header)?.trim() || process.env[env]?.trim() || fallback;
 }
 
+const AUTH_CONTEXT_KEY = 'robocoteAuthContext';
+
 /**
- * Resolver temporário de identidade para o alpha.
+ * Injeta o AuthContext resolvido (pelo authMiddleware via sessão real) no request.
+ * Chamado uma vez por request no middleware.
+ */
+export function setRequestAuthContext(c: Context, ctx: AuthContext): void {
+  c.set(AUTH_CONTEXT_KEY, ctx);
+}
+
+/**
+ * Identidade da requisição.
  *
- * Enquanto não há login/sessão, o backend aceita headers internos para simular
- * escopo. Em produção isto vira middleware real de autenticação.
+ * 1. Se o authMiddleware resolveu uma sessão real (login), usa ela — incluindo
+ *    impersonation (superadmin "vira" um tenant).
+ * 2. Fallback DEV: headers internos / env. Só vale quando ROBOCOTE_DEV_AUTH=1 OU
+ *    não há Postgres (spike local). Em produção com login ativo, sem sessão = sem acesso.
  */
 export function resolveAuthContext(c: Context): AuthContext {
+  const fromSession = c.get(AUTH_CONTEXT_KEY) as AuthContext | undefined;
+  if (fromSession) return fromSession;
+  return devAuthContext(c);
+}
+
+/** Contexto de desenvolvimento via headers/env — sem login real. */
+export function devAuthContext(c: Context): AuthContext {
   const role = normalizeRole(c.req.header('x-robocote-role') || process.env.ROBOCOTE_DEV_ROLE);
   const tenantHeader = c.req.header('x-robocote-tenant-id')?.trim();
   const tenantId = role === 'superadmin'

@@ -111,6 +111,25 @@ CREATE INDEX IF NOT EXISTS idx_tenant_configs_tenant_created
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS current_config_id bigint
   REFERENCES tenant_configs(id) ON DELETE SET NULL;
 
+-- Sessões de autenticação (login real, server-side). Cookie httpOnly guarda só o
+-- session_id opaco; todos os dados ficam aqui. Permite revogação imediata (delete)
+-- e impersonation (superadmin "vira" uma corretora via acting_as_tenant_id).
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  id                  text PRIMARY KEY,                 -- token opaco (crypto.randomBytes hex)
+  user_id             text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  acting_as_tenant_id text REFERENCES tenants(id) ON DELETE SET NULL,  -- impersonation ativa
+  ip                  text,
+  user_agent          text,
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  last_seen_at        timestamptz NOT NULL DEFAULT now(),
+  expires_at          timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions (user_id);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions (expires_at);
+
+-- Coluna de troca de senha obrigatória no primeiro acesso (provisioning gera senha temporária).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password boolean NOT NULL DEFAULT false;
+
 -- Credenciais sensíveis (Segfy etc) criptografadas via AES-256-GCM.
 -- Formato de cada campo: "iv_hex:authTag_hex:ciphertext_b64" (encode em src/tenant/credentials.ts).
 -- Chave de criptografia vem da env CREDENTIAL_ENCRYPTION_KEY (32 bytes em hex).

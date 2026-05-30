@@ -311,6 +311,14 @@ function serializeLead(session: SessionState) {
     answers,
     interactions,
     latestMessage: latestInteraction?.text ?? null,
+    humanOverride: session.humanOverride?.active
+      ? {
+          active: true,
+          source: session.humanOverride.source,
+          startedAt: new Date(session.humanOverride.startedAt).toISOString(),
+          lastActivityAt: new Date(session.humanOverride.lastActivityAt).toISOString(),
+        }
+      : null,
   };
 }
 

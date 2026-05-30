@@ -61,6 +61,12 @@ interface PanelLead {
   answers: PanelAnswer[];
   interactions: PanelInteraction[];
   latestMessage: string | null;
+  humanOverride: {
+    active: boolean;
+    source: 'auto_detected' | 'panel_explicit';
+    startedAt: string;
+    lastActivityAt: string;
+  } | null;
 }
 
 interface PanelResponse {
@@ -267,6 +273,16 @@ async function updateLeadStage(leadId: string, stage: string, token: string): Pr
     body: JSON.stringify({ stage }),
   });
   const body = await parsePanelResponse<{ ok: true; lead: PanelLead }>(response, 'Não foi possível mover o lead.');
+  return body.lead;
+}
+
+async function setLeadOverride(leadId: string, active: boolean, token: string): Promise<PanelLead> {
+  const response = await panelFetch(`/api/painel/leads/${encodeURIComponent(leadId)}/override`, token, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ active }),
+  });
+  const body = await parsePanelResponse<{ ok: true; lead: PanelLead }>(response, 'Não foi possível alterar o controle do atendimento.');
   return body.lead;
 }
 
@@ -684,12 +700,16 @@ function LeadModal({
   lead,
   onClose,
   onStageChange,
+  onToggleOverride,
 }: {
   lead: PanelLead | null;
   onClose: () => void;
   onStageChange: (stage: string) => void;
+  onToggleOverride: (active: boolean) => void;
 }): JSX.Element | null {
   if (!lead) return null;
+
+  const overrideActive = lead.humanOverride?.active ?? false;
 
   return (
     <div className="lead-modal-backdrop" role="presentation" onMouseDown={onClose}>
@@ -707,6 +727,17 @@ function LeadModal({
             <p>{lead.vehicle}</p>
           </div>
           <div className="lead-modal-actions">
+            <button
+              type="button"
+              className={overrideActive ? 'lead-override-btn lead-override-active' : 'lead-override-btn'}
+              onClick={() => onToggleOverride(!overrideActive)}
+              title={overrideActive
+                ? 'O agente está pausado. Clique para devolver o atendimento ao bot.'
+                : 'Assumir o atendimento — o agente para de responder este lead.'}
+            >
+              {overrideActive ? <MessageCircle size={16} /> : <UserRound size={16} />}
+              {overrideActive ? 'Devolver pro Bot' : 'Assumir atendimento'}
+            </button>
             <label className="lead-stage-select">
               <span>Mover para</span>
               <select value={lead.stage.key} onChange={(event) => onStageChange(event.target.value)}>
@@ -722,6 +753,16 @@ function LeadModal({
             </button>
           </div>
         </header>
+        {overrideActive ? (
+          <div className="lead-override-banner">
+            🟡 Atendimento humano ativo
+            {lead.humanOverride?.source === 'auto_detected' ? ' (detectado pelo WhatsApp)' : ''}
+            {lead.humanOverride?.startedAt
+              ? ` desde ${new Date(lead.humanOverride.startedAt).toLocaleString('pt-BR')}`
+              : ''}
+            . O agente não responde até você devolver ou após 24h sem atividade.
+          </div>
+        ) : null}
         <div className="lead-modal-content">
           <ConversationPanel lead={lead} />
           <LeadDetails lead={lead} />
@@ -1632,6 +1673,18 @@ export function Panel(): JSX.Element {
     }
   }
 
+  async function toggleOverride(leadId: string, active: boolean): Promise<void> {
+    try {
+      const updated = await setLeadOverride(leadId, active, panelToken);
+      setData((latest) => latest
+        ? { ...latest, leads: latest.leads.map((lead) => (lead.id === leadId ? updated : lead)) }
+        : latest);
+    } catch (e) {
+      if (handleAccessError(e)) return;
+      setError((e as Error).message);
+    }
+  }
+
   async function submitManualLead(): Promise<void> {
     setManualSaving(true);
     setManualError(null);
@@ -1950,6 +2003,9 @@ export function Panel(): JSX.Element {
         onClose={() => setSelectedId(null)}
         onStageChange={(stage) => {
           if (selectedLead) void moveLead(selectedLead.id, stage);
+        }}
+        onToggleOverride={(active) => {
+          if (selectedLead) void toggleOverride(selectedLead.id, active);
         }}
       />
       <ManualLeadModal

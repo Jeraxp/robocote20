@@ -2945,3 +2945,142 @@ td {
     height: 52px;
   }
 }
+
+/* ─── Intervenção humana (LeadModal) ─────────────────────────────────── */
+.lead-override-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--muted-strong);
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.lead-override-btn:hover {
+  border-color: var(--orange);
+  color: var(--orange-dark);
+}
+.lead-override-btn.lead-override-active {
+  background: #fff6e6;
+  border-color: #f5b73d;
+  color: #9a6800;
+}
+.lead-override-banner {
+  margin: 0 24px 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #fff6e6;
+  border: 1px solid #f5d089;
+  color: #8a5a00;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+/* ─── Cobertura Auto (StepCoverageAuto + SettingsSection) ─────────────── */
+.coverage-auto-form {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.coverage-block {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 20px;
+  background: var(--surface-soft);
+}
+.coverage-block-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+  color: var(--orange-dark);
+}
+.coverage-block-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--ink);
+}
+.coverage-block-header p {
+  margin: 2px 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.coverage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+.coverage-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted-strong);
+}
+.coverage-field select,
+.coverage-field input {
+  padding: 9px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  background: var(--surface);
+  color: var(--ink);
+}
+.coverage-field.coverage-checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  align-self: end;
+  padding-bottom: 9px;
+}
+.coverage-field.coverage-checkbox input {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+}
+.coverage-money {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.coverage-money-prefix {
+  padding: 9px 10px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-weight: 600;
+  border-right: 1px solid var(--line);
+}
+.coverage-money input {
+  border: none;
+  flex: 1;
+  min-width: 0;
+}
+.coverage-banner {
+  margin-bottom: 14px;
+  padding: 11px 15px;
+  border-radius: 10px;
+  background: var(--blue-soft);
+  border: 1px solid var(--line-strong);
+  color: var(--muted-strong);
+  font-size: 0.85rem;
+}
+.coverage-banner-error {
+  background: #fdeced;
+  border-color: #f3b6bb;
+  color: #a3303a;
+}
+.coverage-banner-success {
+  background: var(--green-soft);
+  border-color: #9fe0bf;
+  color: #11794c;
+}

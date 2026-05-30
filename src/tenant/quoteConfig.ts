@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { getPostgresPool, isPostgresConfigured } from '../db/postgres.js';
 
 /**
@@ -110,4 +111,61 @@ export async function getTenantComissao(tenantId: string, ramo: Ramo): Promise<n
     throw new Error(`Tenant ${tenantId} não tem comissão configurada pro ramo "${ramo}".`);
   }
   return comissao;
+}
+
+export type ConfigSource = 'onboarding_initial' | 'panel_edit' | 'admin_override' | 'migration' | 'rollback';
+
+/**
+ * Grava uma NOVA versão da config do tenant (insert-only em tenant_configs) e
+ * atualiza tenants.current_config_id pra apontar pra ela. Histórico preservado.
+ *
+ * Usa transação pra garantir que o insert + update do ponteiro sejam atômicos.
+ * config_hash = sha256 do JSON — permite detectar no-op (mesma config salva 2x).
+ */
+export async function saveTenantQuoteConfig(
+  tenantId: string,
+  config: TenantQuoteConfigShape,
+  opts: { source: ConfigSource; changedBy?: string | null; changeNote?: string | null },
+): Promise<{ configId: number; configHash: string; skipped: boolean }> {
+  if (!isPostgresConfigured()) {
+    throw new Error('Postgres não configurado — quoteConfig não pode ser gravada.');
+  }
+  const configHash = createHash('sha256').update(JSON.stringify(config)).digest('hex');
+  const pool = getPostgresPool();
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+
+    // No-op guard: se o hash bate com a config ativa atual, não cria nova linha.
+    const current = await client.query<{ config_hash: string; id: string }>(
+      `select tc.config_hash, tc.id
+       from tenant_configs tc
+       join tenants t on t.current_config_id = tc.id
+       where t.id = $1
+       limit 1`,
+      [tenantId],
+    );
+    if (current.rows[0]?.config_hash === configHash) {
+      await client.query('commit');
+      return { configId: Number(current.rows[0].id), configHash, skipped: true };
+    }
+
+    const inserted = await client.query<{ id: string }>(
+      `insert into tenant_configs (tenant_id, config, config_hash, source, changed_by, change_note)
+       values ($1, $2::jsonb, $3, $4, $5, $6)
+       returning id`,
+      [tenantId, JSON.stringify(config), configHash, opts.source, opts.changedBy ?? null, opts.changeNote ?? null],
+    );
+    const configId = Number(inserted.rows[0].id);
+
+    await client.query('update tenants set current_config_id = $1, updated_at = now() where id = $2', [configId, tenantId]);
+
+    await client.query('commit');
+    return { configId, configHash, skipped: false };
+  } catch (e) {
+    await client.query('rollback').catch(() => undefined);
+    throw e;
+  } finally {
+    client.release();
+  }
 }

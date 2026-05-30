@@ -105,3 +105,21 @@ export interface QuoteSummary {
   options: QuoteOptionSummary[];
   generatedAt: string;
 }
+
+/** Cobertura Auto — espelha CoverageAuto do backend (src/tenant/quoteConfig.ts). */
+export interface CoverageAuto {
+  tipo_cobertura: string;
+  tabela_fipe: number;
+  franquia: string;
+  isencao_franquia: boolean;
+  vidros: string;
+  assistencia_24h: string;
+  carro_reserva: string;
+  tipo_carro_reserva: string;
+  reposicao_zero_km: string;
+  rcf_dm: number;
+  rcf_dc: number;
+  danos_morais: number;
+  app_morte: number;
+  desp_extras: number;
+}

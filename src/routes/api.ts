@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { z } from 'zod';
 import { createHash, timingSafeEqual } from 'crypto';
 import type { Context } from 'hono';
 import { adminStore } from '../admin/store.js';
@@ -12,6 +13,12 @@ import {
 import { getQuoteSummary, type QuoteCustomerInfo, type CoveragePreference } from '../quote/summary.js';
 import { cacheQuoteContext, readQuoteContext } from '../quote/contextCache.js';
 import { getAgentName } from '../tenant/agent.js';
+import {
+  getTenantQuoteConfig,
+  saveTenantQuoteConfig,
+  type CoverageAuto,
+  type TenantQuoteConfigShape,
+} from '../tenant/quoteConfig.js';
 import { autoF1QuoteRequestSchema, runAutoF1Quote } from '../journey/autoF1.js';
 import { handleAutoF1AssistantMessage, parseAssistantRequest } from '../assistant/autoF1.js';
 import { parseRagSearchRequest, searchKnowledge } from '../assistant/rag.js';
@@ -966,4 +973,129 @@ api.post('/painel/leads/:id/override', async (c) => {
 
   const updated = await sessionStore.upsert(next);
   return c.json({ ok: true, lead: serializeLead(updated), humanOverride: updated.humanOverride });
+});
+
+// ─── Configuração de cobertura Auto por tenant (seção Configurações do Painel) ──────
+// Enums validados contra valores oficiais aceitos pela Segfy NJ (swagger-public.json).
+const coverageAutoSchema = z.object({
+  tipo_cobertura: z.enum(['exclusive', 'comprehensive', 'third_party_only']),
+  tabela_fipe: z.number().int().min(0).max(200),
+  franquia: z.enum(['normal', 'reduced_25', 'reduced_50', 'reduced_75', 'facultativa_50', 'facultativa_100']),
+  isencao_franquia: z.boolean(),
+  vidros: z.enum([
+    'no_glass', 'glass_vip_referenced', 'glass_vip_unattached',
+    'glass_basic_referenced', 'glass_basic_unattached',
+    'glass_total_referenced', 'glass_total_unattached',
+  ]),
+  assistencia_24h: z.enum([
+    'no_assistance', 'assistance_200_km_referenced', 'assistance_200_km_unattached',
+    'assistance_500_km_referenced', 'assistance_500_km_unattached',
+    'assistance_1000_km_referenced', 'assistance_1000_km_unattached',
+    'assistance_no_limit_referenced', 'assistance_no_limit_unattached',
+  ]),
+  carro_reserva: z.enum([
+    'no_car', 'rental_car_07_days_referenced', 'rental_car_07_days_unattached',
+    'rental_car_15_days_referenced', 'rental_car_15_days_unattached',
+    'rental_car_30_days_referenced', 'rental_car_30_days_unattached',
+  ]),
+  tipo_carro_reserva: z.enum(['basic', 'no_car', 'essential', 'executive']),
+  reposicao_zero_km: z.enum(['no_replacement', 'zero_km_06_month', 'zero_km_12_month']),
+  rcf_dm: z.number().int().min(0),
+  rcf_dc: z.number().int().min(0),
+  danos_morais: z.number().int().min(0),
+  app_morte: z.number().int().min(0),
+  desp_extras: z.number().int().min(0),
+});
+
+const coverageAutoPutSchema = z.object({
+  coverage: coverageAutoSchema,
+  seguradoras: z.array(z.string().min(1)).min(1).optional(),
+  comissao_auto: z.number().min(0).max(100).optional(),
+});
+
+/**
+ * GET /api/painel/config/coverage-auto — lê config de cobertura Auto do tenant logado.
+ * Retorna 404 amigável quando tenant não tem config (ainda não passou pelo onboarding).
+ */
+api.get('/painel/config/coverage-auto', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const auth = resolveAuthContext(c);
+  const tenantId = auth.tenantId ?? (auth.isSuperadmin ? c.req.query('tenantId') ?? '' : '');
+  if (!tenantId) {
+    return c.json({ ok: false, error: 'tenantId obrigatório (superadmin: passe ?tenantId=)' }, 400);
+  }
+
+  try {
+    const config = await getTenantQuoteConfig(tenantId);
+    return c.json({
+      ok: true,
+      tenantId,
+      coverage: config.coberturas?.auto ?? null,
+      seguradoras: config.seguradoras ?? [],
+      comissao_auto: config.comissoes?.auto ?? null,
+    });
+  } catch (e) {
+    return c.json({ ok: false, error: (e as Error).message, tenantId }, 404);
+  }
+});
+
+/**
+ * PUT /api/painel/config/coverage-auto — grava nova versão de cobertura Auto.
+ * Merge com a config existente (preserva outros ramos/campos), grava versão nova
+ * em tenant_configs (insert-only) com source='panel_edit'.
+ */
+api.put('/painel/config/coverage-auto', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const auth = resolveAuthContext(c);
+  const tenantId = auth.tenantId ?? (auth.isSuperadmin ? (await c.req.json().catch(() => ({})))?.tenantId ?? '' : '');
+  if (!tenantId) {
+    return c.json({ ok: false, error: 'tenantId obrigatório' }, 400);
+  }
+
+  const raw = await c.req.json().catch(() => null);
+  const parsed = coverageAutoPutSchema.safeParse(raw);
+  if (!parsed.success) {
+    return c.json({
+      ok: false,
+      error: 'payload inválido',
+      issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+    }, 400);
+  }
+
+  // Carrega config atual pra fazer merge (preserva ramos/campos não tocados).
+  let current: TenantQuoteConfigShape;
+  try {
+    current = await getTenantQuoteConfig(tenantId);
+  } catch {
+    // Tenant sem config ainda — cria base mínima
+    current = { version: '2.0', plano: 'seguros', ramos: ['auto'] };
+  }
+
+  const coverage: CoverageAuto = parsed.data.coverage;
+  const next: TenantQuoteConfigShape = {
+    ...current,
+    version: current.version ?? '2.0',
+    ramos: current.ramos?.includes('auto') ? current.ramos : [...(current.ramos ?? []), 'auto'],
+    seguradoras: parsed.data.seguradoras ?? current.seguradoras,
+    comissoes: {
+      ...current.comissoes,
+      ...(parsed.data.comissao_auto !== undefined ? { auto: parsed.data.comissao_auto } : {}),
+    },
+    coberturas: { ...current.coberturas, auto: coverage },
+  };
+
+  try {
+    const result = await saveTenantQuoteConfig(tenantId, next, {
+      source: 'panel_edit',
+      changedBy: auth.userId,
+      changeNote: 'Edição de cobertura Auto via painel',
+    });
+    return c.json({ ok: true, tenantId, ...result });
+  } catch (e) {
+    return c.json({ ok: false, error: (e as Error).message }, 500);
+  }
 });

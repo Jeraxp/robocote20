@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { JSX } from 'react';
+import { StepCoverageAuto, DEFAULT_COVERAGE_AUTO } from './StepCoverageAuto';
+import type { CoverageAuto } from './types';
 import {
   Activity,
   Building2,
@@ -1331,6 +1333,95 @@ function PlaceholderSection({ title }: { title: string }): JSX.Element {
   );
 }
 
+/**
+ * Seção Configurações — edição da cobertura Auto da corretora logada.
+ * Carrega config atual via GET /painel/config/coverage-auto, grava via PUT.
+ * Reflete imediatamente na próxima cotação WhatsApp (cache TTL 60s no backend).
+ */
+function SettingsSection({ token }: { token: string }): JSX.Element {
+  const [coverage, setCoverage] = useState<CoverageAuto>(DEFAULT_COVERAGE_AUTO);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [isNewConfig, setIsNewConfig] = useState(false);
+
+  useEffect(() => {
+    let aborted = false;
+    setLoading(true);
+    setError(null);
+    panelFetch('/api/painel/config/coverage-auto', token)
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({ ok: false }));
+        if (aborted) return;
+        if (res.ok && body.ok && body.coverage) {
+          setCoverage({ ...DEFAULT_COVERAGE_AUTO, ...body.coverage });
+          setIsNewConfig(false);
+        } else {
+          // Tenant sem config — usa defaults e sinaliza que é primeira gravação
+          setCoverage(DEFAULT_COVERAGE_AUTO);
+          setIsNewConfig(true);
+        }
+      })
+      .catch((e: Error) => { if (!aborted) setError(e.message); })
+      .finally(() => { if (!aborted) setLoading(false); });
+    return () => { aborted = true; };
+  }, [token]);
+
+  const save = async (): Promise<void> => {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await panelFetch('/api/painel/config/coverage-auto', token, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ coverage }),
+      });
+      const body = await res.json().catch(() => ({ ok: false }));
+      if (!res.ok || !body.ok) {
+        throw new Error(body.error ?? 'Falha ao salvar configuração');
+      }
+      setSavedAt(new Date().toLocaleTimeString('pt-BR'));
+      setIsNewConfig(false);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="panel-section-page">
+      <header className="panel-hero compact">
+        <div>
+          <h1>Configurações · Cobertura Auto</h1>
+          <p>Define os padrões de cobertura que o agente usa nas cotações de carro desta corretora.</p>
+        </div>
+        <button type="button" className="panel-refresh" onClick={() => void save()} disabled={saving || loading}>
+          <Save size={17} />
+          {saving ? 'Salvando…' : 'Salvar'}
+        </button>
+      </header>
+
+      {isNewConfig ? (
+        <div className="coverage-banner">
+          Esta corretora ainda não tem cobertura configurada — carregamos os padrões Robocote. Ajuste e salve.
+        </div>
+      ) : null}
+      {error ? <div className="coverage-banner coverage-banner-error">{error}</div> : null}
+      {savedAt ? <div className="coverage-banner coverage-banner-success">Salvo às {savedAt}. A próxima cotação já usa esses valores.</div> : null}
+
+      {loading ? (
+        <div className="panel-surface">Carregando configuração…</div>
+      ) : (
+        <div className="panel-surface">
+          <StepCoverageAuto value={coverage} onChange={setCoverage} />
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function Panel(): JSX.Element {
   const [activeSection, setActiveSection] = useState<PanelSection>('leads');
   const [panelToken, setPanelToken] = useState(readStoredPanelToken);
@@ -1848,8 +1939,10 @@ export function Panel(): JSX.Element {
             onState={(instanceName) => void updateWhatsappState(instanceName)}
             onRefresh={() => void refreshWhatsapp()}
           />
+        ) : activeSection === 'settings' ? (
+          <SettingsSection token={panelToken} />
         ) : (
-          <PlaceholderSection title={activeSection === 'settings' ? 'Configurações' : 'Suporte Robocote'} />
+          <PlaceholderSection title="Suporte Robocote" />
         )}
       </section>
       <LeadModal

@@ -196,7 +196,7 @@ api.get('/auth/me', async (c) => {
 });
 
 const changePasswordSchema = z.object({
-  currentPassword: z.string().min(1),
+  currentPassword: z.string().optional().default(''),
   newPassword: z.string().min(6),
 });
 
@@ -208,15 +208,24 @@ api.post('/auth/change-password', async (c) => {
   const raw = await c.req.json().catch(() => null);
   const parsed = changePasswordSchema.safeParse(raw);
   if (!parsed.success) {
-    return c.json({ ok: false, error: 'senha atual e nova (mín. 6 chars) obrigatórias' }, 400);
+    return c.json({ ok: false, error: 'a nova senha precisa ter ao menos 6 caracteres' }, 400);
   }
 
-  const result = await getPostgresPool().query<{ password_hash: string | null }>(
-    'select password_hash from users where id = $1 limit 1',
+  const result = await getPostgresPool().query<{ password_hash: string | null; must_change_password: boolean }>(
+    'select password_hash, must_change_password from users where id = $1 limit 1',
     [auth.userId],
   );
-  const ok = await verifyPassword(parsed.data.currentPassword, result.rows[0]?.password_hash);
-  if (!ok) return c.json({ ok: false, error: 'senha atual incorreta' }, 401);
+  const row = result.rows[0];
+
+  // No primeiro acesso (must_change_password) a sessão já autentica — não exige a senha atual.
+  // Em troca voluntária posterior, exige e valida a senha atual.
+  if (!row?.must_change_password) {
+    if (!parsed.data.currentPassword) {
+      return c.json({ ok: false, error: 'informe sua senha atual' }, 400);
+    }
+    const ok = await verifyPassword(parsed.data.currentPassword, row?.password_hash);
+    if (!ok) return c.json({ ok: false, error: 'senha atual incorreta' }, 401);
+  }
 
   const newHash = await hashPassword(parsed.data.newPassword);
   await getPostgresPool().query(

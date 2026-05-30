@@ -2007,12 +2007,13 @@ export function Panel(): JSX.Element {
     setChangePwLoading(true);
     setChangePwError(null);
     try {
-      // currentPassword = a senha usada no login (ainda em memória)
+      // No primeiro acesso a sessão já autentica — currentPassword não é exigida pelo backend.
       await changePasswordRequest(loginPassword || '', newPassword);
-      await refreshAdmin('');
       setNewPassword('');
       setConfirmPassword('');
       setLoginPassword('');
+      // Recarrega admin/me (must_change_password agora false) → libera o painel.
+      await refreshAdmin('');
     } catch (e) {
       setChangePwError((e as Error).message);
     } finally {

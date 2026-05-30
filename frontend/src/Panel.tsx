@@ -951,12 +951,10 @@ function PanelSidebar({
 
       <div className="panel-sidebar-footer">
         <span>{admin?.auth.email ?? 'dev mode'}</span>
-        <small>{admin ? roleLabel(admin.auth.role) : 'Auth alpha'}</small>
-        {admin?.auth.authMode === 'session' ? (
-          <button type="button" className="panel-logout-btn" onClick={onLogout}>
-            <X size={15} /> Sair
-          </button>
-        ) : null}
+        <small>{admin ? roleLabel(admin.auth.role) : 'Auth alpha'}{admin?.auth.authMode === 'dev' ? ' · token' : ''}</small>
+        <button type="button" className="panel-logout-btn" onClick={onLogout}>
+          <X size={15} /> Sair
+        </button>
       </div>
     </aside>
   );
@@ -1974,6 +1972,7 @@ export function Panel(): JSX.Element {
 
   async function submitLogout(): Promise<void> {
     await logoutRequest();
+    persistPanelToken(''); // limpa também o token dev (fallback) do sessionStorage
     setAdmin(null);
     setData(null);
     setAccessRequired(true);

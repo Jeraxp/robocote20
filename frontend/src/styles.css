@@ -3085,6 +3085,108 @@ td {
   color: #11794c;
 }
 
+/* ─── Accordion de coberturas por ramo (Configurações) ───────────────── */
+.ramo-accordion {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ramo-accordion-item {
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+  transition: border-color 0.15s ease;
+}
+.ramo-accordion-item.expanded {
+  border-color: var(--brand-dark);
+}
+.ramo-accordion-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1rem;
+  color: var(--ink);
+}
+.ramo-accordion-head:hover {
+  background: var(--surface-soft);
+}
+.ramo-accordion-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+}
+.ramo-accordion-title svg {
+  color: var(--brand-dark);
+}
+.ramo-accordion-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.ramo-badge {
+  font-size: 0.74rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #eef2f7;
+  color: var(--muted-strong);
+  border: 1px solid var(--line-strong);
+}
+.ramo-badge.on {
+  background: var(--green-soft);
+  color: #11794c;
+  border-color: #9fe0bf;
+}
+.ramo-chevron {
+  color: var(--muted-strong);
+  transition: transform 0.18s ease;
+}
+.ramo-accordion-item.expanded .ramo-chevron {
+  transform: rotate(180deg);
+}
+.ramo-accordion-body {
+  padding: 4px 18px 18px;
+  border-top: 1px solid var(--line-strong);
+}
+.ramo-offer-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0;
+  font-size: 0.9rem;
+  color: var(--muted-strong);
+  cursor: pointer;
+}
+.ramo-offer-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--brand-dark);
+  cursor: pointer;
+}
+.ramo-disabled-hint {
+  margin: 8px 0 4px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--surface-soft);
+  color: var(--muted-strong);
+  font-size: 0.88rem;
+}
+.ramo-accordion-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
 /* ─── Login / Impersonation / Logout ─────────────────────────────────── */
 .impersonation-banner {
   display: flex;

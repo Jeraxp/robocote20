@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { JSX } from 'react';
 import { StepCoverageAuto, DEFAULT_COVERAGE_AUTO } from './StepCoverageAuto';
-import type { CoverageAuto } from './types';
+import { StepCoverageResidencial, DEFAULT_COVERAGE_RESIDENCIAL } from './StepCoverageResidencial';
+import type { CoverageAuto, CoverageResidencial } from './types';
 import {
   Activity,
+  Bike,
   Building2,
   Car,
   CheckCircle2,
+  ChevronDown,
+  Home,
   X,
   Clock3,
   ExternalLink,
@@ -20,6 +24,7 @@ import {
   Settings,
   ShieldCheck,
   Smartphone,
+  Truck,
   UserRound,
   UsersRound,
 } from 'lucide-react';
@@ -1516,13 +1521,40 @@ function PlaceholderSection({ title }: { title: string }): JSX.Element {
   );
 }
 
+/** Produtos vehicle configuráveis no accordion — mesmo motor Segfy, diferem por vehicle_type. */
+interface VehicleRamoDef {
+  key: 'auto' | 'moto' | 'caminhao';
+  label: string;
+  blurb: string;
+  icon: typeof Car;
+}
+const VEHICLE_RAMO_DEFS: VehicleRamoDef[] = [
+  { key: 'auto', label: 'Seguro de Carro', blurb: 'Cobertura padrão das cotações de carro.', icon: Car },
+  { key: 'moto', label: 'Seguro de Moto', blurb: 'Cobertura padrão das cotações de moto.', icon: Bike },
+  { key: 'caminhao', label: 'Seguro de Caminhão', blurb: 'Cobertura padrão das cotações de caminhão.', icon: Truck },
+];
+
 /**
- * Seção Configurações — edição da cobertura Auto da corretora logada.
- * Carrega config atual via GET /painel/config/coverage-auto, grava via PUT.
- * Reflete imediatamente na próxima cotação WhatsApp (cache TTL 60s no backend).
+ * Item de accordion de um ramo vehicle. Auto-contido: carrega sua própria cobertura
+ * (GET /coverage/:ramo) ao montar — assim o badge "Oferecido" aparece já recolhido —
+ * e grava via PUT /coverage/:ramo com { coverage, offered }.
+ *
+ * Toggle "Ofereço este ramo": quando desligado, a corretora não precisa preencher
+ * coberturas (Jera) e o robô não oferta esse ramo no atendimento (sai de ramos[]).
  */
-function SettingsSection({ token }: { token: string }): JSX.Element {
+function RamoAccordionItem({
+  ramo,
+  token,
+  expanded,
+  onToggle,
+}: {
+  ramo: VehicleRamoDef;
+  token: string;
+  expanded: boolean;
+  onToggle: () => void;
+}): JSX.Element {
   const [coverage, setCoverage] = useState<CoverageAuto>(DEFAULT_COVERAGE_AUTO);
+  const [offered, setOffered] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1533,16 +1565,153 @@ function SettingsSection({ token }: { token: string }): JSX.Element {
     let aborted = false;
     setLoading(true);
     setError(null);
-    panelFetch('/api/painel/config/coverage-auto', token)
+    panelFetch(`/api/painel/config/coverage/${ramo.key}`, token)
       .then(async (res) => {
         const body = await res.json().catch(() => ({ ok: false }));
         if (aborted) return;
-        if (res.ok && body.ok && body.coverage) {
-          setCoverage({ ...DEFAULT_COVERAGE_AUTO, ...body.coverage });
-          setIsNewConfig(false);
+        if (res.ok && body.ok) {
+          setOffered(Boolean(body.offered));
+          if (body.coverage) {
+            setCoverage({ ...DEFAULT_COVERAGE_AUTO, ...body.coverage });
+            setIsNewConfig(false);
+          } else {
+            setCoverage(DEFAULT_COVERAGE_AUTO);
+            setIsNewConfig(true);
+          }
         } else {
-          // Tenant sem config — usa defaults e sinaliza que é primeira gravação
           setCoverage(DEFAULT_COVERAGE_AUTO);
+          setIsNewConfig(true);
+        }
+      })
+      .catch((e: Error) => { if (!aborted) setError(e.message); })
+      .finally(() => { if (!aborted) setLoading(false); });
+    return () => { aborted = true; };
+  }, [token, ramo.key]);
+
+  const save = async (): Promise<void> => {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await panelFetch(`/api/painel/config/coverage/${ramo.key}`, token, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ coverage, offered }),
+      });
+      const body = await res.json().catch(() => ({ ok: false }));
+      if (!res.ok || !body.ok) {
+        throw new Error(body.error ?? 'Falha ao salvar configuração');
+      }
+      setSavedAt(new Date().toLocaleTimeString('pt-BR'));
+      setIsNewConfig(false);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const Icon = ramo.icon;
+  return (
+    <div className={`ramo-accordion-item${expanded ? ' expanded' : ''}`}>
+      <button type="button" className="ramo-accordion-head" onClick={onToggle}>
+        <span className="ramo-accordion-title">
+          <Icon size={20} />
+          {ramo.label}
+        </span>
+        <span className="ramo-accordion-meta">
+          {loading ? (
+            <span className="ramo-badge">…</span>
+          ) : (
+            <span className={`ramo-badge${offered ? ' on' : ''}`}>{offered ? 'Oferecido' : 'Não oferecido'}</span>
+          )}
+          <ChevronDown size={18} className="ramo-chevron" />
+        </span>
+      </button>
+
+      {expanded ? (
+        <div className="ramo-accordion-body">
+          <label className="ramo-offer-toggle">
+            <input type="checkbox" checked={offered} onChange={(e) => setOffered(e.target.checked)} />
+            <span>Ofereço este ramo — quando ligado, o robô cota {ramo.label.toLowerCase()} no atendimento.</span>
+          </label>
+
+          {error ? <div className="coverage-banner coverage-banner-error">{error}</div> : null}
+          {savedAt ? <div className="coverage-banner coverage-banner-success">Salvo às {savedAt}. A próxima cotação já usa esses valores.</div> : null}
+
+          {offered ? (
+            <>
+              {isNewConfig ? (
+                <div className="coverage-banner">
+                  Sem cobertura configurada para este ramo — carregamos os padrões Robocote. Ajuste e salve.
+                </div>
+              ) : null}
+              {loading ? (
+                <div className="panel-surface">Carregando configuração…</div>
+              ) : (
+                <div className="panel-surface">
+                  <StepCoverageAuto value={coverage} onChange={setCoverage} />
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="ramo-disabled-hint">
+              Este ramo está desligado — não é necessário preencher coberturas. Ligue o toggle acima se quiser que o robô ofereça cotações de {ramo.label.toLowerCase()}.
+            </p>
+          )}
+
+          <div className="ramo-accordion-actions">
+            <button type="button" className="panel-refresh" onClick={() => void save()} disabled={saving || loading}>
+              <Save size={17} />
+              {saving ? 'Salvando…' : 'Salvar'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Item de accordion do ramo Residencial. Mesma mecânica do RamoAccordionItem, mas o
+ * motor Segfy é outro (`residence`), então usa o StepCoverageResidencial e o endpoint
+ * dedicado /coverage-residencial.
+ */
+function ResidencialAccordionItem({
+  token,
+  expanded,
+  onToggle,
+}: {
+  token: string;
+  expanded: boolean;
+  onToggle: () => void;
+}): JSX.Element {
+  const [coverage, setCoverage] = useState<CoverageResidencial>(DEFAULT_COVERAGE_RESIDENCIAL);
+  const [offered, setOffered] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [isNewConfig, setIsNewConfig] = useState(false);
+
+  useEffect(() => {
+    let aborted = false;
+    setLoading(true);
+    setError(null);
+    panelFetch('/api/painel/config/coverage-residencial', token)
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({ ok: false }));
+        if (aborted) return;
+        if (res.ok && body.ok) {
+          setOffered(Boolean(body.offered));
+          if (body.coverage) {
+            setCoverage({ ...DEFAULT_COVERAGE_RESIDENCIAL, ...body.coverage });
+            setIsNewConfig(false);
+          } else {
+            setCoverage(DEFAULT_COVERAGE_RESIDENCIAL);
+            setIsNewConfig(true);
+          }
+        } else {
+          setCoverage(DEFAULT_COVERAGE_RESIDENCIAL);
           setIsNewConfig(true);
         }
       })
@@ -1555,10 +1724,10 @@ function SettingsSection({ token }: { token: string }): JSX.Element {
     setSaving(true);
     setError(null);
     try {
-      const res = await panelFetch('/api/painel/config/coverage-auto', token, {
+      const res = await panelFetch('/api/painel/config/coverage-residencial', token, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ coverage }),
+        body: JSON.stringify({ coverage, offered }),
       });
       const body = await res.json().catch(() => ({ ok: false }));
       if (!res.ok || !body.ok) {
@@ -1574,33 +1743,98 @@ function SettingsSection({ token }: { token: string }): JSX.Element {
   };
 
   return (
+    <div className={`ramo-accordion-item${expanded ? ' expanded' : ''}`}>
+      <button type="button" className="ramo-accordion-head" onClick={onToggle}>
+        <span className="ramo-accordion-title">
+          <Home size={20} />
+          Seguro Residencial
+        </span>
+        <span className="ramo-accordion-meta">
+          {loading ? (
+            <span className="ramo-badge">…</span>
+          ) : (
+            <span className={`ramo-badge${offered ? ' on' : ''}`}>{offered ? 'Oferecido' : 'Não oferecido'}</span>
+          )}
+          <ChevronDown size={18} className="ramo-chevron" />
+        </span>
+      </button>
+
+      {expanded ? (
+        <div className="ramo-accordion-body">
+          <label className="ramo-offer-toggle">
+            <input type="checkbox" checked={offered} onChange={(e) => setOffered(e.target.checked)} />
+            <span>Ofereço este ramo — quando ligado, o robô cota seguro residencial no atendimento.</span>
+          </label>
+
+          {error ? <div className="coverage-banner coverage-banner-error">{error}</div> : null}
+          {savedAt ? <div className="coverage-banner coverage-banner-success">Salvo às {savedAt}. A próxima cotação já usa esses valores.</div> : null}
+
+          {offered ? (
+            <>
+              {isNewConfig ? (
+                <div className="coverage-banner">
+                  Sem cobertura residencial configurada — carregamos os padrões Robocote. Ajuste e salve.
+                </div>
+              ) : null}
+              {loading ? (
+                <div className="panel-surface">Carregando configuração…</div>
+              ) : (
+                <div className="panel-surface">
+                  <StepCoverageResidencial value={coverage} onChange={setCoverage} />
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="ramo-disabled-hint">
+              Este ramo está desligado — não é necessário preencher coberturas. Ligue o toggle acima se quiser que o robô ofereça cotações de seguro residencial.
+            </p>
+          )}
+
+          <div className="ramo-accordion-actions">
+            <button type="button" className="panel-refresh" onClick={() => void save()} disabled={saving || loading}>
+              <Save size={17} />
+              {saving ? 'Salvando…' : 'Salvar'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Seção Configurações — accordion de coberturas por produto (Jera: "abre o formulário
+ * descendo, sem mudar de tela; ao clicar em outro, o anterior recolhe").
+ * Cada item é uma corretora-config independente; o robô só oferta ramos ligados.
+ */
+function SettingsSection({ token }: { token: string }): JSX.Element {
+  const [expanded, setExpanded] = useState<string | null>('auto');
+
+  return (
     <section className="panel-section-page">
       <header className="panel-hero compact">
         <div>
-          <h1>Configurações · Cobertura Auto</h1>
-          <p>Define os padrões de cobertura que o agente usa nas cotações de carro desta corretora.</p>
+          <h1>Configurações · Coberturas</h1>
+          <p>Configure os padrões de cobertura por produto. Ligue só os ramos que sua corretora oferece — o robô cota apenas o que estiver ligado.</p>
         </div>
-        <button type="button" className="panel-refresh" onClick={() => void save()} disabled={saving || loading}>
-          <Save size={17} />
-          {saving ? 'Salvando…' : 'Salvar'}
-        </button>
       </header>
 
-      {isNewConfig ? (
-        <div className="coverage-banner">
-          Esta corretora ainda não tem cobertura configurada — carregamos os padrões Robocote. Ajuste e salve.
-        </div>
-      ) : null}
-      {error ? <div className="coverage-banner coverage-banner-error">{error}</div> : null}
-      {savedAt ? <div className="coverage-banner coverage-banner-success">Salvo às {savedAt}. A próxima cotação já usa esses valores.</div> : null}
-
-      {loading ? (
-        <div className="panel-surface">Carregando configuração…</div>
-      ) : (
-        <div className="panel-surface">
-          <StepCoverageAuto value={coverage} onChange={setCoverage} />
-        </div>
-      )}
+      <div className="ramo-accordion">
+        {VEHICLE_RAMO_DEFS.map((r) => (
+          <RamoAccordionItem
+            key={r.key}
+            ramo={r}
+            token={token}
+            expanded={expanded === r.key}
+            onToggle={() => setExpanded(expanded === r.key ? null : r.key)}
+          />
+        ))}
+        <ResidencialAccordionItem
+          token={token}
+          expanded={expanded === 'residencial'}
+          onToggle={() => setExpanded(expanded === 'residencial' ? null : 'residencial')}
+        />
+      </div>
     </section>
   );
 }

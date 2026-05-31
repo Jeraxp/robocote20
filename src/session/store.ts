@@ -46,7 +46,14 @@ const ACTIVE_STEPS = [
   'driver_sex',
   'quote_link',
 ] as const;
-export type SessionStepId = (typeof ACTIVE_STEPS)[number] | 'complete';
+/**
+ * Steps de intake (roteamento) que antecedem a jornada de captura (Jera 2026-05-31):
+ *  - service_type: "Você precisa de uma cotação ou de atendimento?"
+ *  - branch_select: "Para qual seguro você deseja essa cotação?" (ramos ativos)
+ * São tratados deterministicamente no orquestrador, antes da jornada Segfy.
+ */
+export type IntakeStepId = 'service_type' | 'branch_select';
+export type SessionStepId = IntakeStepId | (typeof ACTIVE_STEPS)[number] | 'complete';
 
 export interface SessionAnswer {
   id: string;
@@ -94,8 +101,11 @@ export interface HumanOverride {
   startedAt: number;
   /** Timestamp da última mensagem outbound do humano (usado pra timeout 24h). */
   lastActivityAt: number;
-  /** Origem: 'auto_detected' (via outbound não-bot) | 'panel_explicit' (botão no painel). */
-  source: 'auto_detected' | 'panel_explicit';
+  /**
+   * Origem: 'auto_detected' (outbound não-bot) | 'panel_explicit' (botão no painel)
+   * | 'lead_requested' (lead escolheu "Atendimento" no intake — Jera 2026-05-31).
+   */
+  source: 'auto_detected' | 'panel_explicit' | 'lead_requested';
   /** Quando preenchido, identifica qual operador assumiu (panel_explicit). */
   operatorId?: string;
 }
@@ -168,7 +178,7 @@ export function createInitialSessionState(key: SessionKey): SessionState {
     tenantId: key.tenantId,
     channel: key.channel,
     channelUserId: key.channelUserId,
-    stepId: 'name',
+    stepId: 'service_type',
     completed: false,
     pipelineStage: 'novos_leads',
     answers: {},

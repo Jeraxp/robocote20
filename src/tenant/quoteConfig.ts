@@ -17,6 +17,21 @@ import { getPostgresPool, isPostgresConfigured } from '../db/postgres.js';
 
 export type Ramo = 'auto' | 'moto' | 'caminhao' | 'residencial' | 'vida_individual' | 'vida_grupo' | 'saude' | 'rc_profissional';
 
+/** Ramos que rodam no MESMO motor Segfy `vehicle` (mesmo shape de cobertura, muda só vehicle_type). */
+export type VehicleRamo = 'auto' | 'moto' | 'caminhao';
+export const VEHICLE_RAMOS: VehicleRamo[] = ['auto', 'moto', 'caminhao'];
+
+/** Mapeia ramo → vehicle_type aceito pela Segfy no payload de cotação. */
+export const VEHICLE_TYPE_BY_RAMO: Record<VehicleRamo, string> = {
+  auto: 'car',
+  moto: 'motorcycle',
+  caminhao: 'truck',
+};
+
+export function isVehicleRamo(value: string): value is VehicleRamo {
+  return (VEHICLE_RAMOS as string[]).includes(value);
+}
+
 /**
  * Cobertura de ramo Auto. Valores enum (franquia, tipo_cobertura, assistencia_24h, vidros,
  * carro_reserva, tipo_carro_reserva, reposicao_zero_km) DEVEM bater com os enums oficiais
@@ -26,6 +41,7 @@ export type Ramo = 'auto' | 'moto' | 'caminhao' | 'residencial' | 'vida_individu
  * O wizard é responsável por mostrar labels amigáveis ("Compreensiva") e gravar values técnicos
  * ("comprehensive"). Ver swagger-public.json pra lista canônica de valores aceitos.
  */
+/** CoverageVehicle: shape de cobertura compartilhado por auto/moto/caminhão (motor Segfy vehicle). */
 export interface CoverageAuto {
   tipo_cobertura: string;     // 'comprehensive' | 'rcf' | 'fire_and_theft' | ...
   tabela_fipe: number;        // 100, 110, custom 0-200
@@ -43,6 +59,37 @@ export interface CoverageAuto {
   desp_extras: number;        // R$ — despesas extraordinárias
 }
 
+/** Alias semântico — auto/moto/caminhão usam o mesmo shape. */
+export type CoverageVehicle = CoverageAuto;
+
+/**
+ * Cobertura Residencial — DEFAULTS da corretora pro motor Segfy `residence`
+ * (`/api/residence/version/1.0/calculate`, shape totalmente diferente do vehicle).
+ *
+ * Aqui ficam só os padrões que a corretora controla: a verba (o que está segurado),
+ * o nível de assistência e os limites R$ das coberturas secundárias. Os valores
+ * dependentes do lead — valor do imóvel (edificação) e do conteúdo, que também
+ * definem o limite de incêndio — vêm na jornada, não no painel.
+ *
+ * Enums `verba` e `assistencia` batem com o swagger Segfy (sum / assistance).
+ */
+export interface CoverageResidencial {
+  verba: string;                   // sum: 'content' | 'building' | 'building_content'
+  assistencia: string;             // assistance: 'basic' | 'intermediary' | 'total'
+  danos_eletricos: number;         // electrical_damages — R$
+  tubulacoes: number;              // pipes (ruptura de tubulações) — R$
+  pagamento_aluguel: number;       // rent_payment — R$
+  quebra_vidros: number;           // glasses — R$
+  recomposicao_documentos: number; // recomposition_documents — R$
+  rc_familiar: number;             // family (responsabilidade civil familiar) — R$
+  roubo_furto: number;             // theft — R$
+  vendaval: number;                // wind (vendaval/furacão/granizo) — R$
+  impacto_veiculo: number;         // vehicle_impact — R$
+  danos_morais: number;            // moral_damages — R$
+  desmoronamento: number;          // landslip — R$
+  terremoto: number;               // earthquake — R$
+}
+
 export interface TenantQuoteConfigShape {
   version: string;
   plano?: 'seguros' | 'saude' | 'ambos';
@@ -53,8 +100,15 @@ export interface TenantQuoteConfigShape {
     auto?: CoverageAuto;
     moto?: CoverageAuto;
     caminhao?: CoverageAuto;
-    // residencial, vida_*, rc_profissional → próximos slices
+    residencial?: CoverageResidencial;
+    // vida_*, rc_profissional → próximos slices
   };
+}
+
+/** Ramos que a corretora declarou que oferece (toggle no painel). Vazio = nenhum. */
+export async function getTenantActiveRamos(tenantId: string): Promise<Ramo[]> {
+  const config = await getTenantQuoteConfig(tenantId);
+  return config.ramos ?? [];
 }
 
 /**
@@ -91,6 +145,15 @@ export async function getTenantCoverageForRamo(
   const coverage = config.coberturas?.[ramo];
   if (!coverage) {
     throw new Error(`Tenant ${tenantId} não tem cobertura configurada pro ramo "${ramo}". Complete o onboarding ou ajuste no painel.`);
+  }
+  return coverage;
+}
+
+export async function getTenantCoverageResidencial(tenantId: string): Promise<CoverageResidencial> {
+  const config = await getTenantQuoteConfig(tenantId);
+  const coverage = config.coberturas?.residencial;
+  if (!coverage) {
+    throw new Error(`Tenant ${tenantId} não tem cobertura residencial configurada. Complete o onboarding ou ajuste no painel.`);
   }
   return coverage;
 }

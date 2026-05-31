@@ -123,3 +123,21 @@ export interface CoverageAuto {
   app_morte: number;
   desp_extras: number;
 }
+
+/** Cobertura Residencial — espelha CoverageResidencial do backend (motor Segfy residence). */
+export interface CoverageResidencial {
+  verba: string;
+  assistencia: string;
+  danos_eletricos: number;
+  tubulacoes: number;
+  pagamento_aluguel: number;
+  quebra_vidros: number;
+  recomposicao_documentos: number;
+  rc_familiar: number;
+  roubo_furto: number;
+  vendaval: number;
+  impacto_veiculo: number;
+  danos_morais: number;
+  desmoronamento: number;
+  terremoto: number;
+}

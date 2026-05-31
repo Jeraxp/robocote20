@@ -4,7 +4,13 @@ import { createCallbackId, postCalcular, type CalcularPayload, type CalcularResu
 import { openSocket, closeSocket, waitForSocketConnect, type SocketEvent, type SocketSession } from '../segfy/socket.js';
 import { getQuoteSummary, type QuoteSummary } from '../quote/summary.js';
 import { dumpJSON } from '../utils/logger.js';
-import { getTenantQuoteConfig, type CoverageAuto } from '../tenant/quoteConfig.js';
+import {
+  getTenantQuoteConfig,
+  isVehicleRamo,
+  VEHICLE_TYPE_BY_RAMO,
+  type CoverageAuto,
+  type VehicleRamo,
+} from '../tenant/quoteConfig.js';
 
 const DEFAULT_QUOTE_TIMEOUT_MS = 45000;
 const MAX_QUOTE_TIMEOUT_MS = 90000;
@@ -22,6 +28,8 @@ const autoF1AnswersSchema = z.object({
     message: 'nome completo com sobrenome é obrigatório',
   }),
   mode: z.string().trim().min(2).default(REAL_MODE),
+  // Ramo vehicle escolhido no atendimento (auto/moto/caminhao). Default auto (compat).
+  insurance_branch: z.string().trim().optional().default('auto'),
   vehicle_brand: z.string().trim().min(1, 'marca do veículo é obrigatória'),
   vehicle_brand_text: z.string().trim().min(1, 'texto da marca do veículo é obrigatório'),
   vehicle_year: z.string().trim().min(4, 'ano do veículo é obrigatório'),
@@ -290,6 +298,8 @@ function resolveVehicle(answers: AutoF1QuoteRequest['answers']): ResolvedVehicle
 export interface TenantQuoteContext {
   coverage: CoverageAuto;
   insurers: Array<{ name: string; commission: number }>;
+  /** vehicle_type Segfy: 'car' (auto) | 'motorcycle' (moto) | 'truck' (caminhão). Default 'car'. */
+  vehicleType?: string;
 }
 
 export function buildAutoF1Payload(
@@ -359,7 +369,7 @@ export function buildAutoF1Payload(
         category_type: 'particular',
         fipe_value: vehicle.fipe_value,
         brand: vehicle.brand,
-        vehicle_type: 'car',
+        vehicle_type: tenantContext.vehicleType ?? 'car',
         alienated: false,
         chassis_relabeled: false,
         model_year: vehicle.model_year,
@@ -528,19 +538,27 @@ export async function runAutoF1Quote(
   // Carrega config da corretora antes do build. Sem config → fail-fast com erro descritivo.
   // tenantId padrão pra rpi (compat retroativa enquanto callers não foram totalmente migrados).
   const effectiveTenantId = (tenantId ?? process.env.ROBOCOTE_TENANT_ID ?? 'rpi').trim();
+  // Ramo vehicle escolhido no atendimento (auto/moto/caminhao). Default auto (compat).
+  const ramo: VehicleRamo = isVehicleRamo(request.answers.insurance_branch ?? '')
+    ? (request.answers.insurance_branch as VehicleRamo)
+    : 'auto';
   const config = await getTenantQuoteConfig(effectiveTenantId);
-  const coverage = config.coberturas?.auto;
+  const coverage = config.coberturas?.[ramo];
   if (!coverage) {
-    throw new Error(`Tenant "${effectiveTenantId}" não tem cobertura auto configurada. Complete o onboarding antes de cotar.`);
+    throw new Error(`Tenant "${effectiveTenantId}" não tem cobertura "${ramo}" configurada. Complete o onboarding antes de cotar.`);
   }
   const seguradoras = config.seguradoras ?? [];
-  const comissaoAuto = config.comissoes?.auto;
-  if (seguradoras.length === 0 || comissaoAuto === undefined) {
-    throw new Error(`Tenant "${effectiveTenantId}" não tem seguradoras/comissão auto configuradas.`);
+  const comissao = config.comissoes?.[ramo];
+  if (seguradoras.length === 0 || comissao === undefined) {
+    throw new Error(`Tenant "${effectiveTenantId}" não tem seguradoras/comissão "${ramo}" configuradas.`);
   }
-  const insurers = seguradoras.map((name) => ({ name, commission: comissaoAuto }));
+  const insurers = seguradoras.map((name) => ({ name, commission: comissao }));
 
-  const { payload, vehicleProfile } = buildAutoF1Payload(request, callbackId, { coverage, insurers });
+  const { payload, vehicleProfile } = buildAutoF1Payload(request, callbackId, {
+    coverage,
+    insurers,
+    vehicleType: VEHICLE_TYPE_BY_RAMO[ramo],
+  });
   const session = openSocket(callbackId);
 
   try {

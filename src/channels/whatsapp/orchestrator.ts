@@ -31,16 +31,97 @@ import type { EvolutionInboundMessage } from './evolution.js';
 import { sendWhatsappText, wasMessageSentByBot } from './evolution.js';
 import { getAgentName } from '../../tenant/agent.js';
 import { cacheQuoteContext } from '../../quote/contextCache.js';
+import { getTenantActiveRamos, isVehicleRamo, VEHICLE_RAMOS, type VehicleRamo } from '../../tenant/quoteConfig.js';
 
 const ROBOCOTE_QUOTE_BASE_URL = process.env.ROBOCOTE_QUOTE_BASE_URL?.trim() ?? '';
 const ROBOCOTE_TENANT_ID = process.env.ROBOCOTE_TENANT_ID?.trim() || 'rpi';
 
+/** Pergunta 1 do intake (Jera 2026-05-31): cotação vs atendimento humano. */
+const SERVICE_TYPE_QUESTION = [
+  'Como posso te ajudar hoje?',
+  '1️⃣ Cotação de seguro',
+  '2️⃣ Falar com um atendente',
+].join('\n\n');
+
+/** Rótulos PT-BR dos ramos vehicle pra menu de seleção e confirmações. */
+const RAMO_LABELS: Record<VehicleRamo, string> = {
+  auto: 'Seguro de Carro',
+  moto: 'Seguro de Moto',
+  caminhao: 'Seguro de Caminhão',
+};
+
 function buildGreeting(agentName: string): string[] {
   return [
     `Olá! Eu sou o ${agentName}, o seu corretor digital inteligente.`,
-    'Vou te ajudar a cotar seu seguro auto numa conversa simples. Pode responder do seu jeito.',
-    'Pra começar, qual é seu nome completo?',
+    SERVICE_TYPE_QUESTION,
   ];
+}
+
+/** Classifica a resposta da pergunta 1 do intake. */
+function parseServiceType(text: string): 'cotacao' | 'atendimento' | null {
+  const m = normalizeMsg(text);
+  if (!m) return null;
+  // Cotação primeiro (mais comum). "1", "cotar", "orçamento", "preço", "simular", "valor".
+  if (/^1\b|\bcota|\borcament|\bsimul|\bpreco\b|\bvalor(es)?\b|\bcontrat/.test(m)) return 'cotacao';
+  // Atendimento: "2", "atendente", "falar", "humano", "ajuda", "dúvida", "suporte", "pessoa".
+  if (/^2\b|\batend|\bfalar\b|\bhumano|\bduvida|\bajuda\b|\bsuporte|\bpessoa\b|\boperador/.test(m)) return 'atendimento';
+  return null;
+}
+
+/** Ramos vehicle que a corretora oferece (ramos ativos ∩ suportados). Fallback ['auto']. */
+async function resolveOfferableRamos(tenantId: string): Promise<VehicleRamo[]> {
+  try {
+    const active = await getTenantActiveRamos(tenantId);
+    const offerable = active.filter((r): r is VehicleRamo => isVehicleRamo(r));
+    // Mantém ordem canônica (auto, moto, caminhao) pro menu ficar estável.
+    const ordered = VEHICLE_RAMOS.filter((r) => offerable.includes(r));
+    return ordered.length > 0 ? ordered : ['auto'];
+  } catch {
+    return ['auto'];
+  }
+}
+
+/** Monta a pergunta 2 do intake com os ramos ativos numerados. */
+function buildBranchQuestion(ramos: VehicleRamo[]): string {
+  const options = ramos.map((r, i) => `${i + 1}️⃣ ${RAMO_LABELS[r]}`).join('\n\n');
+  return `Para qual seguro você quer a cotação?\n\n${options}`;
+}
+
+/** Interpreta a escolha do ramo: por número (posição no menu) ou por palavra-chave. */
+function parseBranchChoice(text: string, ramos: VehicleRamo[]): VehicleRamo | null {
+  const m = normalizeMsg(text);
+  if (!m) return null;
+  const numMatch = m.match(/^(\d+)\b/);
+  if (numMatch) {
+    const idx = Number(numMatch[1]) - 1;
+    if (idx >= 0 && idx < ramos.length) return ramos[idx];
+  }
+  const byKeyword: Array<{ ramo: VehicleRamo; re: RegExp }> = [
+    { ramo: 'auto', re: /\bcarro|\bauto|\bautomovel|\bveiculo\b/ },
+    { ramo: 'moto', re: /\bmoto|\bmotocicleta|\bscooter/ },
+    { ramo: 'caminhao', re: /\bcaminh|\btruck|\bcarreta/ },
+  ];
+  for (const { ramo, re } of byKeyword) {
+    if (ramos.includes(ramo) && re.test(m)) return ramo;
+  }
+  return null;
+}
+
+/** Crava o ramo escolhido como answer e move a sessão pro 1º step da jornada (name). */
+function setBranchAndStartJourney(session: SessionState, ramo: VehicleRamo): SessionState {
+  return {
+    ...session,
+    stepId: 'name',
+    answers: {
+      ...session.answers,
+      insurance_branch: {
+        id: 'insurance_branch',
+        label: 'Ramo',
+        value: RAMO_LABELS[ramo],
+        rawValue: ramo,
+      },
+    },
+  };
 }
 
 function isLikelyCpfDigits(digits: string): boolean {
@@ -263,6 +344,7 @@ function answersFromSession(session: SessionState): AutoF1QuoteRequest['answers'
   return {
     name: get('name'),
     mode: 'real',
+    insurance_branch: getRaw('insurance_branch') || 'auto',
     vehicle_brand: getRaw('vehicle_brand'),
     vehicle_brand_text: brandMeta.brand_text ?? a.vehicle_brand?.value ?? '',
     vehicle_year: getRaw('vehicle_year'),
@@ -338,7 +420,7 @@ async function triggerCalculate(
 export async function processWhatsappTurn(
   inbound: EvolutionInboundMessage,
   options: { tenantId?: string } = {},
-): Promise<{ replySent: string | null; action: AssistantAction | 'greet' | 'calc_failed' | 'reset' | 'human_intervention' | 'human_paused' | 'human_handoff_back'; sessionAfter: SessionState | null }> {
+): Promise<{ replySent: string | null; action: AssistantAction | 'greet' | 'calc_failed' | 'reset' | 'human_intervention' | 'human_paused' | 'human_handoff_back' | 'human_handoff_requested' | 'service_type' | 'branch_selected'; sessionAfter: SessionState | null }> {
   const tenantId = options.tenantId ?? ROBOCOTE_TENANT_ID;
   const key: SessionKey = { tenantId, channel: 'whatsapp', channelUserId: inbound.fromPhone };
 
@@ -398,11 +480,23 @@ export async function processWhatsappTurn(
     // Timeout vencido (24h sem outbound humano): bot retoma com recapitulação.
     // Não processa o conteúdo da mensagem atual — só manda o recap e espera a próxima.
     const agentName = await getAgentName(tenantId);
-    const currentStep = session.stepId === 'complete' ? 'quote_link' : session.stepId;
-    const stepPrompt = STEP_PROMPT[currentStep as StepId] ?? 'Pode continuar de onde paramos?';
-    const recap = buildRecapMessage(session, agentName, stepPrompt);
+    // Se o humano assumiu ainda no intake, retomar com a cotação não faz sentido —
+    // reapresenta o menu de serviço em vez do recap de cotação.
+    let recap: string;
+    if (session.stepId === 'service_type' || session.stepId === 'branch_select') {
+      recap = `${agentName} por aqui de novo. ${SERVICE_TYPE_QUESTION}`;
+    } else {
+      const currentStep = session.stepId === 'complete' ? 'quote_link' : session.stepId;
+      const stepPrompt = STEP_PROMPT[currentStep as StepId] ?? 'Pode continuar de onde paramos?';
+      recap = buildRecapMessage(session, agentName, stepPrompt);
+    }
     await sendWhatsappText(inbound.fromPhone, recap);
-    const cleared: SessionState = { ...session, humanOverride: null };
+    const resumedAtIntake = session.stepId === 'service_type' || session.stepId === 'branch_select';
+    const cleared: SessionState = {
+      ...session,
+      humanOverride: null,
+      stepId: resumedAtIntake ? 'service_type' : session.stepId,
+    };
     const persisted = await sessionStore.upsert(
       appendSessionInteraction(
         appendSessionInteraction(cleared, {
@@ -449,6 +543,65 @@ export async function processWhatsappTurn(
     await sendWhatsappText(inbound.fromPhone, reply);
     const persisted = await sessionStore.upsert(recordTurn(session, inbound, reply, 'none'));
     return { replySent: reply, action: 'none', sessionAfter: persisted };
+  }
+
+  // ─── Intake P1 — serviço: cotação ou atendimento humano? (Jera 2026-05-31) ────
+  if (session.stepId === 'service_type') {
+    const intent = parseServiceType(inbound.text);
+
+    if (intent === 'atendimento') {
+      // Handoff humano — reutiliza o mecanismo de humanOverride (pausa o bot).
+      const reply = 'Perfeito! Vou chamar um atendente da nossa equipe pra te ajudar por aqui. Já já alguém responde. 🙋';
+      await sendWhatsappText(inbound.fromPhone, reply);
+      const now = Date.now();
+      const handoff: SessionState = {
+        ...session,
+        humanOverride: { active: true, startedAt: now, lastActivityAt: now, source: 'lead_requested' },
+      };
+      const persisted = await sessionStore.upsert(recordTurn(handoff, inbound, reply, 'human_handoff_requested'));
+      return { replySent: reply, action: 'human_handoff_requested', sessionAfter: persisted };
+    }
+
+    if (intent === 'cotacao') {
+      const ramos = await resolveOfferableRamos(tenantId);
+      // Um único ramo ativo → pula a pergunta 2 (menos fricção) e já começa a jornada.
+      if (ramos.length <= 1) {
+        const ramo = ramos[0] ?? 'auto';
+        const advanced = setBranchAndStartJourney(session, ramo);
+        const reply = `Ótimo, ${RAMO_LABELS[ramo].toLowerCase()} então!\n\n${STEP_PROMPT.name}`;
+        await sendWhatsappText(inbound.fromPhone, reply);
+        const persisted = await sessionStore.upsert(recordTurn(advanced, inbound, reply, 'branch_selected'));
+        return { replySent: reply, action: 'branch_selected', sessionAfter: persisted };
+      }
+      const question = buildBranchQuestion(ramos);
+      const moved: SessionState = { ...session, stepId: 'branch_select' };
+      await sendWhatsappText(inbound.fromPhone, question);
+      const persisted = await sessionStore.upsert(recordTurn(moved, inbound, question, 'service_type'));
+      return { replySent: question, action: 'service_type', sessionAfter: persisted };
+    }
+
+    // Ambíguo — reapresenta a pergunta 1.
+    const reply = `Só pra eu te direcionar certo:\n\n${SERVICE_TYPE_QUESTION}`;
+    await sendWhatsappText(inbound.fromPhone, reply);
+    const persisted = await sessionStore.upsert(recordTurn(session, inbound, reply, 'ask_clarification'));
+    return { replySent: reply, action: 'ask_clarification', sessionAfter: persisted };
+  }
+
+  // ─── Intake P2 — ramo: para qual seguro é a cotação? ──────────────────────────
+  if (session.stepId === 'branch_select') {
+    const ramos = await resolveOfferableRamos(tenantId);
+    const chosen = parseBranchChoice(inbound.text, ramos);
+    if (!chosen) {
+      const reply = `Não peguei qual seguro você quer. ${buildBranchQuestion(ramos)}`;
+      await sendWhatsappText(inbound.fromPhone, reply);
+      const persisted = await sessionStore.upsert(recordTurn(session, inbound, reply, 'ask_clarification'));
+      return { replySent: reply, action: 'ask_clarification', sessionAfter: persisted };
+    }
+    const advanced = setBranchAndStartJourney(session, chosen);
+    const reply = `Ótimo, ${RAMO_LABELS[chosen].toLowerCase()} então!\n\n${STEP_PROMPT.name}`;
+    await sendWhatsappText(inbound.fromPhone, reply);
+    const persisted = await sessionStore.upsert(recordTurn(advanced, inbound, reply, 'branch_selected'));
+    return { replySent: reply, action: 'branch_selected', sessionAfter: persisted };
   }
 
   // ─── P1 — Proposta pendente aguardando confirmação ──────────────────────────────
@@ -786,6 +939,12 @@ export async function processWhatsappTurn(
     const updated = await sessionStore.upsert(recordOutbound(calculatingSession, calc.topReply, 'calculate', calc.guid));
     await sendWhatsappText(inbound.fromPhone, calc.topReply);
     return { replySent: calc.topReply, action: 'calculate', sessionAfter: updated };
+  }
+
+  // A esta altura os steps de intake (service_type/branch_select) já foram tratados
+  // e retornaram acima — este guard estreita o tipo pra jornada e é inalcançável na prática.
+  if (session.stepId === 'service_type' || session.stepId === 'branch_select') {
+    return { replySent: null, action: 'none', sessionAfter: session };
   }
 
   // Carrega catálogo server-side se step exige.

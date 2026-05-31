@@ -29,7 +29,6 @@ import { getAgentName } from '../tenant/agent.js';
 import {
   getTenantQuoteConfig,
   saveTenantQuoteConfig,
-  type CoverageAuto,
   type TenantQuoteConfigShape,
 } from '../tenant/quoteConfig.js';
 import { autoF1QuoteRequestSchema, runAutoF1Quote } from '../journey/autoF1.js';
@@ -312,6 +311,9 @@ const PANEL_STEP_ORDER = [
 ] as const;
 
 const PANEL_LABELS: Record<string, string> = {
+  service_type: 'Triagem',
+  branch_select: 'Ramo',
+  insurance_branch: 'Ramo',
   name: 'Nome',
   vehicle_brand: 'Marca',
   vehicle_year: 'Ano',
@@ -1236,22 +1238,163 @@ const coverageAutoSchema = z.object({
   desp_extras: z.number().int().min(0),
 });
 
-const coverageAutoPutSchema = z.object({
+// Schema de PUT de cobertura vehicle (auto/moto/caminhão compartilham o mesmo shape).
+const coverageVehiclePutSchema = z.object({
   coverage: coverageAutoSchema,
   seguradoras: z.array(z.string().min(1)).min(1).optional(),
-  comissao_auto: z.number().min(0).max(100).optional(),
+  comissao: z.number().min(0).max(100).optional(),
+  offered: z.boolean().optional(),
+  tenantId: z.string().optional(),
+});
+
+// ─── Configuração de cobertura Residencial (motor Segfy `residence`, shape próprio) ──
+// Enums validados contra /api/residence/version/1.0/calculate (swagger-public.json).
+const coverageResidencialSchema = z.object({
+  verba: z.enum(['content', 'building', 'building_content']),
+  assistencia: z.enum(['basic', 'intermediary', 'total']),
+  danos_eletricos: z.number().int().min(0),
+  tubulacoes: z.number().int().min(0),
+  pagamento_aluguel: z.number().int().min(0),
+  quebra_vidros: z.number().int().min(0),
+  recomposicao_documentos: z.number().int().min(0),
+  rc_familiar: z.number().int().min(0),
+  roubo_furto: z.number().int().min(0),
+  vendaval: z.number().int().min(0),
+  impacto_veiculo: z.number().int().min(0),
+  danos_morais: z.number().int().min(0),
+  desmoronamento: z.number().int().min(0),
+  terremoto: z.number().int().min(0),
+});
+
+const coverageResidencialPutSchema = z.object({
+  coverage: coverageResidencialSchema,
+  seguradoras: z.array(z.string().min(1)).min(1).optional(),
+  comissao: z.number().min(0).max(100).optional(),
+  offered: z.boolean().optional(),
+  tenantId: z.string().optional(),
+});
+
+// Ramos vehicle aceitos nos endpoints de cobertura (auto/moto/caminhão — mesmo motor Segfy).
+const VEHICLE_RAMO_SET = new Set(['auto', 'moto', 'caminhao']);
+
+function resolveConfigTenantId(c: Context, auth: ReturnType<typeof resolveAuthContext>, bodyTenantId?: string): string {
+  return auth.tenantId ?? (auth.isSuperadmin ? (c.req.query('tenantId') ?? bodyTenantId ?? '') : '');
+}
+
+/**
+ * GET /api/painel/config/coverage/:ramo — lê cobertura de um ramo vehicle (auto/moto/caminhao).
+ * Inclui os ramos ativos da corretora pra UI do accordion saber o que está ligado.
+ */
+api.get('/painel/config/coverage/:ramo', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const ramo = c.req.param('ramo');
+  if (!VEHICLE_RAMO_SET.has(ramo)) {
+    return c.json({ ok: false, error: `ramo "${ramo}" não suportado neste endpoint (use auto/moto/caminhao)` }, 400);
+  }
+
+  const auth = resolveAuthContext(c);
+  const tenantId = resolveConfigTenantId(c, auth);
+  if (!tenantId) {
+    return c.json({ ok: false, error: 'tenantId obrigatório (superadmin: passe ?tenantId=)' }, 400);
+  }
+
+  try {
+    const config = await getTenantQuoteConfig(tenantId);
+    const ramoKey = ramo as 'auto' | 'moto' | 'caminhao';
+    return c.json({
+      ok: true,
+      tenantId,
+      ramo,
+      offered: (config.ramos ?? []).includes(ramoKey),
+      activeRamos: config.ramos ?? [],
+      coverage: config.coberturas?.[ramoKey] ?? null,
+      seguradoras: config.seguradoras ?? [],
+      comissao: config.comissoes?.[ramoKey] ?? null,
+    });
+  } catch (e) {
+    return c.json({ ok: false, error: (e as Error).message, tenantId }, 404);
+  }
 });
 
 /**
- * GET /api/painel/config/coverage-auto — lê config de cobertura Auto do tenant logado.
- * Retorna 404 amigável quando tenant não tem config (ainda não passou pelo onboarding).
+ * PUT /api/painel/config/coverage/:ramo — grava cobertura de um ramo vehicle + toggle "ofereço".
+ * Merge insert-only: preserva os demais ramos/campos. `offered` controla se o ramo entra
+ * em `ramos` (atendimento só oferta ramos ativos).
  */
-api.get('/painel/config/coverage-auto', async (c) => {
+api.put('/painel/config/coverage/:ramo', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const ramo = c.req.param('ramo');
+  if (!VEHICLE_RAMO_SET.has(ramo)) {
+    return c.json({ ok: false, error: `ramo "${ramo}" não suportado (use auto/moto/caminhao)` }, 400);
+  }
+  const ramoKey = ramo as 'auto' | 'moto' | 'caminhao';
+
+  const raw = await c.req.json().catch(() => null);
+  const auth = resolveAuthContext(c);
+  const tenantId = resolveConfigTenantId(c, auth, (raw as { tenantId?: string } | null)?.tenantId);
+  if (!tenantId) {
+    return c.json({ ok: false, error: 'tenantId obrigatório' }, 400);
+  }
+
+  const parsed = coverageVehiclePutSchema.safeParse(raw);
+  if (!parsed.success) {
+    return c.json({
+      ok: false,
+      error: 'payload inválido',
+      issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+    }, 400);
+  }
+
+  let current: TenantQuoteConfigShape;
+  try {
+    current = await getTenantQuoteConfig(tenantId);
+  } catch {
+    current = { version: '2.0', plano: 'seguros', ramos: [] };
+  }
+
+  // offered=true adiciona o ramo a ramos[]; offered=false remove (corretora desligou).
+  const offered = parsed.data.offered ?? true;
+  const baseRamos = (current.ramos ?? []).filter((r) => r !== ramoKey);
+  const nextRamos = offered ? [...baseRamos, ramoKey] : baseRamos;
+
+  const next: TenantQuoteConfigShape = {
+    ...current,
+    version: current.version ?? '2.0',
+    ramos: nextRamos,
+    seguradoras: parsed.data.seguradoras ?? current.seguradoras,
+    comissoes: {
+      ...current.comissoes,
+      ...(parsed.data.comissao !== undefined ? { [ramoKey]: parsed.data.comissao } : {}),
+    },
+    coberturas: { ...current.coberturas, [ramoKey]: parsed.data.coverage },
+  };
+
+  try {
+    const result = await saveTenantQuoteConfig(tenantId, next, {
+      source: 'panel_edit',
+      changedBy: auth.userId,
+      changeNote: `Edição de cobertura ${ramo} via painel`,
+    });
+    return c.json({ ok: true, tenantId, ramo, offered, ...result });
+  } catch (e) {
+    return c.json({ ok: false, error: (e as Error).message }, 500);
+  }
+});
+
+/**
+ * GET /api/painel/config/coverage-residencial — lê cobertura residencial do tenant.
+ * Motor Segfy `residence` (shape próprio), por isso endpoint dedicado (não /coverage/:ramo).
+ */
+api.get('/painel/config/coverage-residencial', async (c) => {
   const denied = requirePanelAccess(c);
   if (denied) return denied;
 
   const auth = resolveAuthContext(c);
-  const tenantId = auth.tenantId ?? (auth.isSuperadmin ? c.req.query('tenantId') ?? '' : '');
+  const tenantId = resolveConfigTenantId(c, auth);
   if (!tenantId) {
     return c.json({ ok: false, error: 'tenantId obrigatório (superadmin: passe ?tenantId=)' }, 400);
   }
@@ -1261,9 +1404,12 @@ api.get('/painel/config/coverage-auto', async (c) => {
     return c.json({
       ok: true,
       tenantId,
-      coverage: config.coberturas?.auto ?? null,
+      ramo: 'residencial',
+      offered: (config.ramos ?? []).includes('residencial'),
+      activeRamos: config.ramos ?? [],
+      coverage: config.coberturas?.residencial ?? null,
       seguradoras: config.seguradoras ?? [],
-      comissao_auto: config.comissoes?.auto ?? null,
+      comissao: config.comissoes?.residencial ?? null,
     });
   } catch (e) {
     return c.json({ ok: false, error: (e as Error).message, tenantId }, 404);
@@ -1271,22 +1417,21 @@ api.get('/painel/config/coverage-auto', async (c) => {
 });
 
 /**
- * PUT /api/painel/config/coverage-auto — grava nova versão de cobertura Auto.
- * Merge com a config existente (preserva outros ramos/campos), grava versão nova
- * em tenant_configs (insert-only) com source='panel_edit'.
+ * PUT /api/painel/config/coverage-residencial — grava cobertura residencial + toggle "ofereço".
+ * Mesma semântica de merge insert-only do endpoint vehicle; `offered` controla `ramos[]`.
  */
-api.put('/painel/config/coverage-auto', async (c) => {
+api.put('/painel/config/coverage-residencial', async (c) => {
   const denied = requirePanelAccess(c);
   if (denied) return denied;
 
+  const raw = await c.req.json().catch(() => null);
   const auth = resolveAuthContext(c);
-  const tenantId = auth.tenantId ?? (auth.isSuperadmin ? (await c.req.json().catch(() => ({})))?.tenantId ?? '' : '');
+  const tenantId = resolveConfigTenantId(c, auth, (raw as { tenantId?: string } | null)?.tenantId);
   if (!tenantId) {
     return c.json({ ok: false, error: 'tenantId obrigatório' }, 400);
   }
 
-  const raw = await c.req.json().catch(() => null);
-  const parsed = coverageAutoPutSchema.safeParse(raw);
+  const parsed = coverageResidencialPutSchema.safeParse(raw);
   if (!parsed.success) {
     return c.json({
       ok: false,
@@ -1295,35 +1440,36 @@ api.put('/painel/config/coverage-auto', async (c) => {
     }, 400);
   }
 
-  // Carrega config atual pra fazer merge (preserva ramos/campos não tocados).
   let current: TenantQuoteConfigShape;
   try {
     current = await getTenantQuoteConfig(tenantId);
   } catch {
-    // Tenant sem config ainda — cria base mínima
-    current = { version: '2.0', plano: 'seguros', ramos: ['auto'] };
+    current = { version: '2.0', plano: 'seguros', ramos: [] };
   }
 
-  const coverage: CoverageAuto = parsed.data.coverage;
+  const offered = parsed.data.offered ?? true;
+  const baseRamos = (current.ramos ?? []).filter((r) => r !== 'residencial');
+  const nextRamos = offered ? [...baseRamos, 'residencial' as const] : baseRamos;
+
   const next: TenantQuoteConfigShape = {
     ...current,
     version: current.version ?? '2.0',
-    ramos: current.ramos?.includes('auto') ? current.ramos : [...(current.ramos ?? []), 'auto'],
+    ramos: nextRamos,
     seguradoras: parsed.data.seguradoras ?? current.seguradoras,
     comissoes: {
       ...current.comissoes,
-      ...(parsed.data.comissao_auto !== undefined ? { auto: parsed.data.comissao_auto } : {}),
+      ...(parsed.data.comissao !== undefined ? { residencial: parsed.data.comissao } : {}),
     },
-    coberturas: { ...current.coberturas, auto: coverage },
+    coberturas: { ...current.coberturas, residencial: parsed.data.coverage },
   };
 
   try {
     const result = await saveTenantQuoteConfig(tenantId, next, {
       source: 'panel_edit',
       changedBy: auth.userId,
-      changeNote: 'Edição de cobertura Auto via painel',
+      changeNote: 'Edição de cobertura residencial via painel',
     });
-    return c.json({ ok: true, tenantId, ...result });
+    return c.json({ ok: true, tenantId, ramo: 'residencial', offered, ...result });
   } catch (e) {
     return c.json({ ok: false, error: (e as Error).message }, 500);
   }

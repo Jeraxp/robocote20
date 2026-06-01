@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { createCallbackId, postCalcular, type CalcularPayload, type CalcularResult } from '../segfy/calcular.js';
+import { getInsurersForVehicleType } from '../segfy/companies.js';
 import { openSocket, closeSocket, waitForSocketConnect, type SocketEvent, type SocketSession } from '../segfy/socket.js';
 import { getQuoteSummary, type QuoteSummary } from '../quote/summary.js';
 import { dumpJSON } from '../utils/logger.js';
@@ -547,17 +548,26 @@ export async function runAutoF1Quote(
   if (!coverage) {
     throw new Error(`Tenant "${effectiveTenantId}" não tem cobertura "${ramo}" configurada. Complete o onboarding antes de cotar.`);
   }
-  const seguradoras = config.seguradoras ?? [];
-  const comissao = config.comissoes?.[ramo];
-  if (seguradoras.length === 0 || comissao === undefined) {
-    throw new Error(`Tenant "${effectiveTenantId}" não tem seguradoras/comissão "${ramo}" configuradas.`);
+
+  // Modelo universal (Jera 2026-06-01): manda TODAS as seguradoras ativas do ramo
+  // (company-list por vehicle_type); a Segfy filtra por credencial. Sem curadoria por corretora.
+  const vehicleType = VEHICLE_TYPE_BY_RAMO[ramo];
+  const universe = await getInsurersForVehicleType(vehicleType);
+  if (universe.length === 0) {
+    throw new Error(`Segfy não retornou seguradoras pro vehicle_type "${vehicleType}" (ramo ${ramo}).`);
   }
-  const insurers = seguradoras.map((name) => ({ name, commission: comissao }));
+  // Comissão: se a corretora definiu uma comissão pro ramo no painel, ela vale pra todas;
+  // senão usa a comissão que a corretora já tem com cada seguradora (vinda da company-list).
+  const ramoCommission = config.comissoes?.[ramo];
+  const insurers = universe.map((ins) => ({
+    name: ins.name,
+    commission: ramoCommission ?? ins.commission,
+  }));
 
   const { payload, vehicleProfile } = buildAutoF1Payload(request, callbackId, {
     coverage,
     insurers,
-    vehicleType: VEHICLE_TYPE_BY_RAMO[ramo],
+    vehicleType,
   });
   const session = openSocket(callbackId);
 

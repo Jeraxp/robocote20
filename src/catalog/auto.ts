@@ -7,7 +7,7 @@
  * o que buscar com base no step atual e nas respostas anteriores.
  */
 
-import { getMarcas } from '../segfy/marcas.js';
+import { getMarcas, type TipoVeiculo, type VehicleTypeNJ } from '../segfy/marcas.js';
 import { getModelos } from '../segfy/modelos.js';
 
 export interface CatalogItem {
@@ -31,8 +31,25 @@ export function stepNeedsCatalog(stepId: string): boolean {
   return STEPS_WITH_CATALOG.has(stepId);
 }
 
-async function loadBrands(): Promise<CatalogItem[]> {
-  const response = await getMarcas('carro');
+const VEHICLE_TYPE_NJ_BY_TIPO: Record<TipoVeiculo, VehicleTypeNJ> = {
+  carro: 'car',
+  moto: 'motorcycle',
+  caminhao: 'truck',
+};
+
+/**
+ * Deriva o tipo de veículo do ramo escolhido no intake (`insurance_branch`).
+ * Sem esse dado (ex: webchat auto-only), assume carro — comportamento legado.
+ */
+function tipoFromAnswers(answers: Record<string, SessionAnswerLike>): TipoVeiculo {
+  const ramo = answers.insurance_branch?.rawValue ?? answers.insurance_branch?.value ?? 'auto';
+  if (ramo === 'moto') return 'moto';
+  if (ramo === 'caminhao') return 'caminhao';
+  return 'carro';
+}
+
+async function loadBrands(tipo: TipoVeiculo): Promise<CatalogItem[]> {
+  const response = await getMarcas(tipo);
   return response.body.map((marca) => ({
     id: marca.id,
     label: marca.text,
@@ -48,14 +65,14 @@ function parseYear(value: string | undefined): number | null {
   return null;
 }
 
-async function loadModels(answers: Record<string, SessionAnswerLike>): Promise<CatalogItem[]> {
+async function loadModels(answers: Record<string, SessionAnswerLike>, vehicleType: VehicleTypeNJ): Promise<CatalogItem[]> {
   const brandId = answers.vehicle_brand?.rawValue ?? answers.vehicle_brand?.value;
   const yearRaw = answers.vehicle_year?.rawValue ?? answers.vehicle_year?.value;
   const year = parseYear(yearRaw);
 
   if (!brandId || !year) return [];
 
-  const response = await getModelos(brandId, year);
+  const response = await getModelos(brandId, year, vehicleType);
   const models = response.body.models ?? [];
   return models.map((modelo) => {
     const fipeCode = modelo.data_fipe?.fipe_code ?? '';
@@ -86,7 +103,8 @@ export async function loadCatalogForStep(
   stepId: string,
   answers: Record<string, SessionAnswerLike>,
 ): Promise<CatalogItem[]> {
-  if (stepId === 'vehicle_brand') return loadBrands();
-  if (stepId === 'vehicle_model') return loadModels(answers);
+  const tipo = tipoFromAnswers(answers);
+  if (stepId === 'vehicle_brand') return loadBrands(tipo);
+  if (stepId === 'vehicle_model') return loadModels(answers, VEHICLE_TYPE_NJ_BY_TIPO[tipo]);
   return [];
 }

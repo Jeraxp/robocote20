@@ -433,13 +433,11 @@ function manualAnswer(id: string, label: string, value: string): SessionAnswer {
 
 function sanitizeAnswer(answer: SessionAnswer): { id: string; label: string; value: string } {
   const label = PANEL_LABELS[answer.id] ?? answer.label ?? answer.id;
-  const raw = answer.value || answer.rawValue || '';
-  const sensitive = answer.id === 'document' || answer.id === 'contact' || answer.id === 'zip_code';
-  return {
-    id: answer.id,
-    label,
-    value: sensitive ? maskSensitive(raw) : maskSensitive(raw),
-  };
+  // Painel/Kanban é a interface do CORRETOR — ele precisa do dado REAL (CPF, telefone, CEP)
+  // pra trabalhar o lead. O mascaramento PII vale só na conversa com o cliente (segurança que
+  // o cliente entende), não nos dados estruturados do painel. (Jera 2026-06-07)
+  const value = answer.value || answer.rawValue || '';
+  return { id: answer.id, label, value };
 }
 
 function leadProgress(session: SessionState): number {

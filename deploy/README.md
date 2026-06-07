@@ -125,8 +125,39 @@ Se algo quebrar:
 - Re-rodar com tag anterior (`ROBOCOTE_IMAGE=robocote/robocote-2:0.0.x`).
 - A Robocote2 (instância Evolution) sobrevive — só fica sem webhook funcional até voltar o backend.
 
+## Deploy automático (CD) — sem SSH, sem firewall, sem IP dinâmico
+
+O `.github/workflows/build.yml` tem um job `deploy` que roda **depois** do build+push e avisa o
+Portainer por **webhook HTTPS** pra re-puxar `ghcr.io/jeraxp/robocote20:latest` e redeployar.
+Assim todo push em `main` vira deploy automático — não depende de SSH na porta 22 (que o firewall
+Hetzner bloqueia por IP) nem do IP dinâmico de quem está rodando.
+
+### Setup (1x, precisa de acesso ao Portainer)
+
+1. **Portainer → o serviço Robocote → aba "Service webhook" → Create** → copia a URL
+   (algo como `https://<portainer>/api/webhooks/<uuid>`).
+2. **GitHub → repo `Jeraxp/robocote20` → Settings → Secrets and variables → Actions → New repository secret:**
+   - Nome: `PORTAINER_WEBHOOK_URL`
+   - Valor: a URL copiada.
+3. Pronto. Enquanto o secret não existe, o job só emite um warning e passa (não quebra o build).
+
+### Subir o build que já está pronto (pendente)
+
+Depois de configurar o secret, pra deployar a `:latest` atual sem esperar um novo push:
+- **Disparar o webhook 1x:** `curl -X POST "<PORTAINER_WEBHOOK_URL>"` (de qualquer lugar), ou
+- **Re-rodar o workflow:** GitHub → Actions → último run → "Re-run jobs", ou
+- Empurrar qualquer commit em `main`.
+
+### Plano B — sem Portainer: Watchtower
+
+Se o swarm não tiver Portainer, subir um serviço `containrrr/watchtower` que faz poll do ghcr e
+atualiza sozinho os serviços com o label `com.centurylinklabs.watchtower.enable=true`. Adicionar esse
+label ao serviço `robocote-2` no `swarm-stack.yml`. Trade-off: atualiza por polling (atraso de minutos),
+não na hora. O webhook do Portainer é preferível (push, imediato, explícito).
+
 ## Cuidados
 
 - **Nunca commitar `.env` real** no repo. Variáveis sensíveis vivem no Portainer Stack Environment.
 - **`ROBOCOTE_DEBUG_ROUTER=1`** loga decisões do extractor — útil enquanto valida, desliga em produção.
 - **Resource limits** estão modestos (1 CPU, 768 MB RAM). Pra carga maior, aumentar `deploy.resources.limits`.
+- **Deploy é via CD (webhook Portainer)** — ver seção "Deploy automático" acima. Não depende de SSH.

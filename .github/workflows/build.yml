@@ -57,3 +57,33 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Deploy automático: avisa o Portainer (webhook HTTPS) pra re-puxar a imagem :latest
+  # e redeployar o serviço no swarm. Sem SSH, sem firewall, sem IP dinâmico.
+  #
+  # Pré-requisito (1x, feito por humano com acesso ao Portainer):
+  #   1. Portainer → o serviço Robocote → Service webhook → Create → copiar a URL.
+  #   2. GitHub repo → Settings → Secrets and variables → Actions → New secret:
+  #        PORTAINER_WEBHOOK_URL = <a URL copiada>
+  # Enquanto o secret não existe, este job apenas avisa e passa (não quebra o build).
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Trigger Portainer redeploy (webhook)
+        env:
+          WEBHOOK: ${{ secrets.PORTAINER_WEBHOOK_URL }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::PORTAINER_WEBHOOK_URL não configurado — deploy automático pulado. Configure o secret pra ativar."
+            exit 0
+          fi
+          echo "Disparando re-pull no Portainer…"
+          code=$(curl -sS -o /tmp/resp -w "%{http_code}" -X POST "$WEBHOOK" || echo "000")
+          echo "Portainer respondeu HTTP $code"
+          # Webhook de serviço do Portainer retorna 204 (No Content) em sucesso; 200 em algumas versões.
+          if [ "$code" != "204" ] && [ "$code" != "200" ]; then
+            echo "::error::Webhook do Portainer falhou (HTTP $code)"; cat /tmp/resp || true; exit 1
+          fi
+          echo "✅ Re-pull disparado. O swarm vai puxar ghcr.io/${{ github.repository }}:latest e redeployar."

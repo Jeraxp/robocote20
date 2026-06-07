@@ -434,8 +434,11 @@ function manualAnswer(id: string, label: string, value: string): SessionAnswer {
 function sanitizeAnswer(answer: SessionAnswer): { id: string; label: string; value: string } {
   const label = PANEL_LABELS[answer.id] ?? answer.label ?? answer.id;
   // Painel/Kanban é a interface do CORRETOR — ele precisa do dado REAL (CPF, telefone, CEP)
-  // pra trabalhar o lead. O mascaramento PII vale só na conversa com o cliente (segurança que
-  // o cliente entende), não nos dados estruturados do painel. (Jera 2026-06-07)
+  // pra trabalhar o lead. Mascaramento PII fica só na conversa com o cliente. (Jera 2026-06-07)
+  // CPF é gravado com value mascarado (657.***.***-90) e rawValue com o CPF real → devolve o real.
+  if (answer.id === 'document' || answer.id === 'main_driver_document') {
+    return { id: answer.id, label, value: answer.rawValue || answer.value || '' };
+  }
   const value = answer.value || answer.rawValue || '';
   return { id: answer.id, label, value };
 }
@@ -506,8 +509,9 @@ function serializeLead(session: SessionState) {
     id: stableLeadId(session),
     tenantId: session.tenantId,
     channel: session.channel,
-    channelUser: maskChannelUser(session.channelUserId),
-    name: maskSensitive(sessionDisplayName(session)),
+    // Telefone e nome reais — corretor precisa ligar/identificar o lead. (Jera 2026-06-07)
+    channelUser: session.channelUserId,
+    name: sessionDisplayName(session),
     firstName: session.customerFirstName,
     status,
     stage,

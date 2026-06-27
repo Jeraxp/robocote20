@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { getRobocotePersona } from './persona.js';
+import { getRagConfig, searchKnowledge } from './rag.js';
 import { loadCatalogForStep, stepNeedsCatalog } from '../catalog/auto.js';
 import { getAgentName } from '../tenant/agent.js';
 
@@ -730,7 +731,7 @@ function summarizeAnswers(answers: AssistantRequest['snapshot']['answers']): Rec
   return out;
 }
 
-async function replySystemPrompt(channel: Channel, mode: AssistantMode, agentName: string): Promise<string> {
+async function replySystemPrompt(channel: Channel, mode: AssistantMode, agentName: string, hasKnowledge = false): Promise<string> {
   const persona = await getRobocotePersona(agentName);
   const { maxChars, humanLabel } = channelLimits(channel);
 
@@ -742,6 +743,14 @@ async function replySystemPrompt(channel: Channel, mode: AssistantMode, agentNam
         '2. NÃO inventar números, preços, franquias ou regras de seguradora.',
         '3. Após responder, oferecer retomar a etapa atual da jornada de forma natural.',
         '4. Se a pergunta exige número específico que só a cotação tem, diga que o número exato vem do cálculo.',
+        ...(hasKnowledge
+          ? [
+              '5. O turno traz `knowledgeBase`: trechos da base de conhecimento curada da corretora — sua FONTE DE VERDADE.',
+              '   - Baseie a resposta PRINCIPALMENTE nesses trechos.',
+              '   - Traduza pra linguagem simples e curta; não copie o texto cru nem cite "fonte", "trecho" ou "documento".',
+              '   - Se os trechos não cobrirem a pergunta, responda com o que sabe de seguros SEM inventar, e ofereça confirmar.',
+            ]
+          : []),
       ].join('\n')
     : [
         '## Turno atual: MODO CAPTURA',
@@ -825,6 +834,7 @@ function replyUserPrompt(
   router: RouterResponse,
   proposedAnswer?: AssistantStepAnswer,
   usedHint = false,
+  knowledgeContext = '',
 ): string {
   const currentStep = STEP_CONTEXT[request.snapshot.stepId];
   return JSON.stringify({
@@ -842,6 +852,7 @@ function replyUserPrompt(
     userMessage: visibleSafe(request.message),
     recentMessages: request.snapshot.recentMessages,
     previousAnswersSummary: summarizeAnswers(request.snapshot.answers),
+    knowledgeBase: knowledgeContext || undefined,
   });
 }
 
@@ -959,6 +970,28 @@ function proposedAnswerFromRouter(
   };
 }
 
+async function fetchKnowledgeContext(request: AssistantRequest, router: RouterResponse): Promise<string> {
+  if (router.mode !== 'consult') return '';
+  if (!getRagConfig().configured) return '';
+  const query = (router.consultTopic || request.message).trim().slice(0, 800);
+  if (query.length < 2) return '';
+  try {
+    const res = await searchKnowledge({ query });
+    if (!res.results.length) return '';
+    if (process.env.ROBOCOTE_DEBUG_ROUTER === '1') {
+      console.log(`[rag] consult "${query}" -> ${res.results.length} trecho(s)`);
+    }
+    return res.results
+      .map((r, i) => `[Trecho ${i + 1}${r.filename ? ` — ${r.filename}` : ''}]\n${r.text}`)
+      .join('\n\n');
+  } catch (e) {
+    if (process.env.ROBOCOTE_DEBUG_ROUTER === '1') {
+      console.warn(`[rag] busca falhou: ${(e as Error).message}`);
+    }
+    return '';
+  }
+}
+
 async function taskdunAi(request: AssistantRequest): Promise<AssistantResponse | null> {
   if (!configured()) return null;
 
@@ -999,6 +1032,7 @@ async function taskdunAi(request: AssistantRequest): Promise<AssistantResponse |
   const usedHint = router.action === 'answer_step' && computeUsedRecentHint(request, proposedAnswer);
 
   const replyModel = needsAnalystModel(request, router) ? ROBOCOTE_ANALYST_MODEL : ROBOCOTE_DIALOG_MODEL;
+  const knowledgeContext = await fetchKnowledgeContext(request, router);
   let reply: string;
 
   try {
@@ -1008,8 +1042,8 @@ async function taskdunAi(request: AssistantRequest): Promise<AssistantResponse |
       model: replyModel,
       json: true,
       messages: [
-        { role: 'system', content: await replySystemPrompt(request.channel, router.mode, agentName) },
-        { role: 'user', content: replyUserPrompt(request, router, proposedAnswer, usedHint) },
+        { role: 'system', content: await replySystemPrompt(request.channel, router.mode, agentName, Boolean(knowledgeContext)) },
+        { role: 'user', content: replyUserPrompt(request, router, proposedAnswer, usedHint, knowledgeContext) },
       ],
     });
     reply = replyResponseSchema.parse(parseJsonContent(replyContent)).reply;

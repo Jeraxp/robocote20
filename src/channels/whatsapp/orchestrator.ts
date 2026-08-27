@@ -27,8 +27,8 @@ import {
   type SessionState,
   type SessionKey,
 } from '../../session/store.js';
-import type { EvolutionInboundMessage } from './evolution.js';
-import { sendWhatsappText, wasMessageSentByBot } from './evolution.js';
+import type { WhatsappInboundMessage } from './transport.js';
+import { sendWhatsappText, wasMessageSentByBot } from './transport.js';
 import { getAgentName } from '../../tenant/agent.js';
 import { cacheQuoteContext } from '../../quote/contextCache.js';
 import { getTenantActiveRamos, isVehicleRamo, VEHICLE_RAMOS, type VehicleRamo } from '../../tenant/quoteConfig.js';
@@ -292,7 +292,7 @@ function buildQuoteLink(guid: string): string {
 
 function recordInbound(
   session: SessionState,
-  inbound: EvolutionInboundMessage,
+  inbound: WhatsappInboundMessage,
   action: string,
 ): SessionState {
   return appendSessionInteraction(session, {
@@ -321,7 +321,7 @@ function recordOutbound(
 
 function recordTurn(
   session: SessionState,
-  inbound: EvolutionInboundMessage,
+  inbound: WhatsappInboundMessage,
   reply: string,
   action: string,
   quoteGuid: string | null = session.lastGuid,
@@ -382,7 +382,7 @@ function answersFromSession(session: SessionState): AutoF1QuoteRequest['answers'
 }
 
 async function triggerCalculate(
-  inbound: EvolutionInboundMessage,
+  inbound: WhatsappInboundMessage,
   session: SessionState,
 ): Promise<{ guid: string; link: string; topReply: string } | null> {
   try {
@@ -418,7 +418,7 @@ async function triggerCalculate(
  * Retorna o que foi enviado de volta (pra logging/teste), ou null se ignorou.
  */
 export async function processWhatsappTurn(
-  inbound: EvolutionInboundMessage,
+  inbound: WhatsappInboundMessage,
   options: { tenantId?: string } = {},
 ): Promise<{ replySent: string | null; action: AssistantAction | 'greet' | 'calc_failed' | 'reset' | 'human_intervention' | 'human_paused' | 'human_handoff_back' | 'human_handoff_requested' | 'service_type' | 'branch_selected'; sessionAfter: SessionState | null }> {
   const tenantId = options.tenantId ?? ROBOCOTE_TENANT_ID;

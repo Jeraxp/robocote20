@@ -381,8 +381,11 @@ function cleanText(value: unknown, maxLength: number): string {
 function normalizeManualPhone(value: unknown): string {
   if (typeof value !== 'string') return '';
   const digits = value.replace(/\D/g, '');
-  if (digits.length < 10 || digits.length > 13) return '';
-  return digits.startsWith('55') ? digits : `55${digits}`;
+  // Decisão pelo COMPRIMENTO, não pelo prefixo: 10-11 dígitos = número local (sempre
+  // ganha o país) — senão DDD 55 (Santa Maria/RS) seria confundido com +55 e truncado.
+  if (digits.length === 10 || digits.length === 11) return `55${digits}`;
+  if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) return digits;
+  return '';
 }
 
 function normalizeDocumentType(value: unknown): 'cpf' | 'cnpj' | null {

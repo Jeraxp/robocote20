@@ -166,7 +166,9 @@ export interface SessionStore {
   size(): Promise<number>;
 }
 
-const DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 dias
+// TTL padrão 7 dias; ROBOCOTE_LEAD_TTL_DAYS estende (leads espelhados do legado não podem evaporar).
+const TTL_DAYS_ENV = Number(process.env.ROBOCOTE_LEAD_TTL_DAYS);
+const DEFAULT_TTL_MS = (Number.isFinite(TTL_DAYS_ENV) && TTL_DAYS_ENV > 0 ? TTL_DAYS_ENV : 7) * 24 * 60 * 60 * 1000;
 
 function keyOf({ tenantId, channel, channelUserId }: SessionKey): string {
   return `${tenantId}::${channel}::${channelUserId}`;

@@ -16,6 +16,7 @@ const app = new Hono();
 
 app.get('/', (c) => c.redirect('/public/index.html'));
 app.get('/webchat', (c) => c.redirect('/public/quote-room/index.html?mode=webchat'));
+app.get('/teste', (c) => c.redirect('/public/teste/index.html'));
 app.get('/painel', (c) => c.redirect('/public/quote-room/index.html?mode=painel'));
 app.get('/quote-room', (c) => c.redirect('/public/quote-room/index.html'));
 app.get('/quote-room/:guid', (c) =>

@@ -51,9 +51,16 @@ export interface WebchatTurnOutput {
 
 /**
  * Roda um turno de webchat pelo motor compartilhado.
- * O `send` do motor vira um coletor: nada sai daqui por conta própria.
+ *
+ * O `send` do motor vira um coletor. Quando `onMessage` é fornecido, cada fala
+ * também é entregue NA HORA em que o motor a produz — é isso que permite o lead
+ * ver "vou calcular agora" na mesma hora, em vez de encarar tela parada por 30
+ * segundos até a cotação inteira voltar. Numa venda, esse silêncio é abandono.
  */
-export async function runWebchatTurn(input: WebchatTurnInput): Promise<WebchatTurnOutput> {
+export async function runWebchatTurn(
+  input: WebchatTurnInput,
+  onMessage?: (text: string) => void | Promise<void>,
+): Promise<WebchatTurnOutput> {
   const tenantId = input.tenantId?.trim() || TENANT_PADRAO;
   const tenantUnresolved = !input.tenantId?.trim();
 
@@ -70,6 +77,7 @@ export async function runWebchatTurn(input: WebchatTurnInput): Promise<WebchatTu
   const result = await runConversationTurn(inbound, {
     send: async (text: string) => {
       messages.push(text);
+      if (onMessage) await onMessage(text);
       return { ok: true, status: 200 };
     },
   });

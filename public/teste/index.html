@@ -32,6 +32,9 @@
     font:12px/1.4 ui-monospace,monospace;max-width:100%}
   .erro{align-self:center;background:var(--erro)}
   .estado{align-self:center;font:11px/1 ui-monospace,monospace;color:var(--fraco);letter-spacing:.06em}
+  .pensando{align-self:flex-start;color:var(--fraco);font-style:italic;font-size:14px;padding:6px 4px}
+  .pensando::after{content:'';animation:pontos 1.2s steps(4,end) infinite}
+  @keyframes pontos{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
   footer{padding:12px 18px;background:var(--painel);border-top:1px solid var(--linha);display:flex;gap:10px}
   footer input{flex:1}
   .aviso{font-size:12px;color:var(--fraco);padding:0 18px 10px}
@@ -101,21 +104,65 @@ async function enviar() {
   if (!texto) return;
   campo.value = '';
   bolha('lead', texto);
+
+  // Indicador de espera: sai assim que a primeira fala do bot chega.
+  const pensando = document.createElement('div');
+  pensando.className = 'pensando';
+  pensando.textContent = 'escrevendo';
+  fluxo.appendChild(pensando);
+  fluxo.scrollTop = fluxo.scrollHeight;
+  const tiraPensando = () => { if (pensando.parentNode) pensando.remove(); };
+
   const t0 = performance.now();
   try {
-    const r = await fetch('/api/chat/turn?tenant=' + encodeURIComponent(tenantEl.value), {
+    const r = await fetch('/api/chat/turn/stream?tenant=' + encodeURIComponent(tenantEl.value), {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: texto }),
     });
-    const j = await r.json();
-    const ms = Math.round(performance.now() - t0);
-    if (!j.ok) { bolha('erro', j.error || 'erro'); return; }
-    for (const m of j.messages) bolha('bot', m);
-    tagStep.textContent = j.stepId || '—';
-    estado(`ação: ${j.action} · passo: ${j.stepId || '—'} · ${ms}ms${j.quoteGuid ? ' · cotação: ' + j.quoteGuid : ''}${j.tenantUnresolved ? ' · ⚠ corretora não identificada' : ''}`);
+    if (!r.body) { tiraPensando(); bolha('erro', 'sem stream'); return; }
+
+    const leitor = r.body.getReader();
+    const dec = new TextDecoder();
+    let buffer = '';
+    let primeira = true;
+
+    // Cada evento SSE traz uma fala do bot; renderiza NA HORA que chega.
+    for (;;) {
+      const { value, done } = await leitor.read();
+      if (done) break;
+      buffer += dec.decode(value, { stream: true });
+      const partes = buffer.split('
+
+');
+      buffer = partes.pop() ?? '';
+      for (const bloco of partes) {
+        const linha = bloco.split('
+').find((l) => l.startsWith('data:'));
+        if (!linha) continue;
+        let ev;
+        try { ev = JSON.parse(linha.slice(5).trim()); } catch { continue; }
+        if (ev.tipo === 'msg') {
+          if (primeira) { tiraPensando(); primeira = false; }
+          bolha('bot', ev.texto);
+          // Depois da 1a fala, volta o indicador: a cotacao ainda esta correndo.
+          fluxo.appendChild(pensando);
+          fluxo.scrollTop = fluxo.scrollHeight;
+        } else if (ev.tipo === 'fim') {
+          tiraPensando();
+          const ms = Math.round(performance.now() - t0);
+          tagStep.textContent = ev.stepId || '—';
+          estado(`ação: ${ev.action} · passo: ${ev.stepId || '—'} · ${ms}ms${ev.quoteGuid ? ' · cotação: ' + ev.quoteGuid : ''}${ev.tenantUnresolved ? ' · ⚠ corretora não identificada' : ''}`);
+        } else if (ev.tipo === 'erro') {
+          tiraPensando();
+          bolha('erro', ev.erro);
+        }
+      }
+    }
+    tiraPensando();
   } catch (e) {
+    tiraPensando();
     bolha('erro', 'falha de rede: ' + e.message);
   }
 }

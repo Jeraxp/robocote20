@@ -28,6 +28,14 @@ const DEMO_GUID = 'a6c2c899-0fb3-4cc4-81a3-ed8cc6742ea7';
 // Em produção, virá do backend via /api/jornadas/auto/f1. Hoje é constante pro spike.
 const ROBOCOTE_WA_NUMBER = '5511999999999';
 
+/**
+ * Ressalva da simulação — o funil é curto de propósito, então o preço parte de
+ * premissas que o segurado não confirmou. Dizer isso separa ESTIMAR de DECLARAR.
+ * Espelha src/quote/disclaimer.ts (backend) — mudou lá, muda aqui.
+ */
+const QUOTE_DISCLAIMER =
+  'Simulação sujeita a confirmação: as condições e o valor final podem variar de acordo com fatores não informados aqui.';
+
 function buildInterestMessage(option: QuoteOptionSummary, customer: QuoteCustomerInfo, summary: QuoteSummary): string {
   const greeting = customer.firstName ? `Olá! Sou ${customer.firstName}` : 'Olá!';
   const vehicle = summary.vehicle.label || 'meu veículo';
@@ -624,6 +632,7 @@ function QuoteRoom({ summary }: { summary: QuoteSummary }): JSX.Element {
           <ComparisonTable options={primaryOptions} />
           <OptionDetails option={selectedOption} agentName={summary.agentName} />
           <AdditionalProducts options={additionalOptions} />
+          <p className="quote-disclaimer">{QUOTE_DISCLAIMER}</p>
           <p className="legal-note">
             Valores sujeitos à validação final da seguradora. Cotação {summary.quotationId.slice(0, 8)} emitida em{' '}
             {formatDate(summary.quoteDate)} e válida até {formatDate(summary.validUntil)}.

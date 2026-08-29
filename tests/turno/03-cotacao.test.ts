@@ -70,3 +70,21 @@ test('CARACTERIZACAO: o payload da cotação carrega respostas que o lead nunca 
   const chaves = Object.keys(payload ?? {});
   assert.ok(chaves.length > 0, 'payload precisa existir para a Fase 5 marcar procedência');
 });
+
+test('a ressalva acompanha o resultado da cotação', async () => {
+  // O funil é curto de propósito; o preço parte de premissas não confirmadas.
+  // A ressalva é o que separa ESTIMAR de DECLARAR — e não pode sumir num refactor.
+  const p = phone(133);
+  await prontoParaCotar(p);
+  ctrl.quoteMode = 'ok';
+  ctrl.sent.length = 0;
+
+  const r = await processWhatsappTurn(inbound('pode calcular', { fromPhone: p }));
+
+  assert.match(
+    r.replySent ?? '',
+    /fatores não informados aqui/i,
+    'toda cotação entregue precisa vir com a ressalva',
+  );
+  assert.match(r.replySent ?? '', /_.*fatores não informados.*_/s, 'em itálico no WhatsApp');
+});

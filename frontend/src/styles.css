@@ -774,6 +774,18 @@ td {
   font-weight: 800;
 }
 
+.quote-disclaimer {
+  margin: 20px 0 0;
+  padding: 11px 15px;
+  font-style: italic;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--muted-strong);
+  background: var(--surface-soft);
+  border-left: 3px solid var(--line-strong);
+  border-radius: 0 8px 8px 0;
+}
+
 .legal-note {
   margin: 18px 0 0;
   color: var(--muted);

@@ -25,6 +25,7 @@ import {
 } from '../../session/store.js';
 import { getAgentName } from '../../tenant/agent.js';
 import { cacheQuoteContext } from '../../quote/contextCache.js';
+import { QUOTE_DISCLAIMER } from '../../quote/disclaimer.js';
 import { getTenantActiveRamos, isVehicleRamo, VEHICLE_RAMOS, type VehicleRamo } from '../../tenant/quoteConfig.js';
 import {
   SERVICE_TYPE_QUESTION,
@@ -223,8 +224,8 @@ async function triggerCalculate(
       .map((o, i) => `${i + 1}) ${o.productName} — R$ ${o.annualPremium.toLocaleString('pt-BR')}`)
       .join('\n');
     const topReply = top
-      ? `Cotação pronta ✅\n\n${top}\n\nDetalhes completos: ${link}`
-      : `Cotação pronta ✅ — detalhes: ${link}`;
+      ? `Cotação pronta ✅\n\n${top}\n\nDetalhes completos: ${link}\n\n_${QUOTE_DISCLAIMER}_`
+      : `Cotação pronta ✅ — detalhes: ${link}\n\n_${QUOTE_DISCLAIMER}_`;
     return { guid: result.guid, link, topReply };
   } catch (e) {
     console.warn(`Falha ao calcular cotação WhatsApp: ${(e as Error).message}`);

@@ -40,6 +40,8 @@ export interface CloudApiInboundMessage {
   messageId?: string;
   /** Timestamp ISO. */
   timestamp: string;
+  /** Número que RECEBEU a mensagem (`metadata.phone_number_id`) — identifica a corretora. */
+  channelAccountId?: string;
 }
 
 export interface SendTextResult {
@@ -138,6 +140,9 @@ export function parseCloudApiInboundMessages(payload: CloudApiWebhookPayload): C
       const changeRec = asRecord(change);
       if (changeRec.field !== 'messages') continue;
       const value = asRecord(changeRec.value);
+      // Identifica a CORRETORA: o número que RECEBEU a mensagem.
+      const metadata = asRecord(value.metadata);
+      const accountId = typeof metadata.phone_number_id === 'string' ? metadata.phone_number_id : undefined;
 
       // Nome do contato: contacts[] é paralelo a messages[] mas na prática vem 1:1 por evento.
       const contacts = Array.isArray(value.contacts) ? value.contacts : [];
@@ -167,6 +172,7 @@ export function parseCloudApiInboundMessages(payload: CloudApiWebhookPayload): C
           fromPhone: from,
           text: text.trim(),
           fromSelf: false,
+          channelAccountId: accountId,
           pushName: nameByWaId.get(from) ?? nameByWaId.values().next().value,
           messageId: typeof messageRec.id === 'string' ? messageRec.id : undefined,
           timestamp,

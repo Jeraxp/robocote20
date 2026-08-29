@@ -30,6 +30,8 @@ export interface EvolutionInboundMessage {
   messageId?: string;
   /** Timestamp ISO. */
   timestamp: string;
+  /** Instância que RECEBEU a mensagem — identifica a corretora. */
+  channelAccountId?: string;
 }
 
 export interface EvolutionWebhookPayload {
@@ -131,6 +133,8 @@ export function parseInboundMessage(payload: EvolutionWebhookPayload): Evolution
     pushName: typeof event.pushName === 'string' ? event.pushName : undefined,
     messageId: typeof key.id === 'string' ? key.id : undefined,
     timestamp,
+    // Identifica a CORRETORA: a instância é quem recebeu a mensagem.
+    channelAccountId: typeof payload.instance === 'string' ? payload.instance : undefined,
   };
 }
 

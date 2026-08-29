@@ -153,6 +153,13 @@ export interface SessionState {
   /** Timestamp do último calculate disparado — usado pra idempotência (lock 60s). */
   lastCalculateAt: number | null;
 
+  /**
+   * true quando a mensagem chegou por uma conta de canal que NÃO está cadastrada
+   * em `whatsapp_instances`. O lead foi atendido com o tenant padrão, mas fica a
+   * marca de que o sistema não soube de quem era — detector do IROM.
+   */
+  tenantUnresolved?: boolean;
+
   createdAt: number;
   updatedAt: number;
 }

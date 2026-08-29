@@ -50,6 +50,8 @@ export interface Ctrl {
   isBotEcho: boolean;
   /** true = envio devolve ok:false (simula falha de entrega). */
   sendFails: boolean;
+  /** Mapa conta-do-canal -> corretora, como estará em `whatsapp_instances`. */
+  contasWhatsapp: Record<string, string>;
   /** Contador monotônico para provar ORDEM entre envio e persistência. */
   seq: number;
   /** Trilha de eventos ordenados: 'send' e 'upsert'. */
@@ -73,6 +75,7 @@ export function createCtrl(): Ctrl {
     catalog: [],
     isBotEcho: false,
     sendFails: false,
+    contasWhatsapp: {},
     seq: 0,
     trail: [],
   };
@@ -170,6 +173,15 @@ export function installMocks(ctrl: Ctrl, opts: InstallOptions = {}): void {
   m('../../src/catalog/auto.js', {
     stepNeedsCatalog: () => false,
     loadCatalogForStep: async () => ctrl.catalog,
+  });
+
+  // D9 — resolvedor de corretora pela conta do canal (Fase 2).
+  m('../../src/tenant/whatsappAccount.js', {
+    clearWhatsappAccountCache: () => undefined,
+    resolveTenantForWhatsappAccount: async (accountId: string | undefined | null) => {
+      const id = accountId?.trim();
+      return id ? (ctrl.contasWhatsapp[id] ?? null) : null;
+    },
   });
 
   // D4 — IA roteirizada (opcional: sem isso, localRules real roda offline).

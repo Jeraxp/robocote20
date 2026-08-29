@@ -529,6 +529,9 @@ function serializeLead(session: SessionState) {
     quoteRoomPath: session.lastGuid ? `/quote-room/${session.lastGuid}` : null,
     createdAt: new Date(session.createdAt).toISOString(),
     updatedAt: new Date(session.updatedAt).toISOString(),
+    // Detector: o lead chegou por uma conta de canal não cadastrada — o sistema
+    // não soube de quem era e atendeu no tenant padrão. Precisa ficar visível.
+    tenantUnresolved: session.tenantUnresolved === true,
     answers,
     interactions,
     latestMessage: latestInteraction?.text ?? null,

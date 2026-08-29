@@ -32,6 +32,7 @@ import { sendWhatsappText, wasMessageSentByBot } from './transport.js';
 import { getAgentName } from '../../tenant/agent.js';
 import { cacheQuoteContext } from '../../quote/contextCache.js';
 import { getTenantActiveRamos, isVehicleRamo, VEHICLE_RAMOS, type VehicleRamo } from '../../tenant/quoteConfig.js';
+import { resolveTenantForWhatsappAccount } from '../../tenant/whatsappAccount.js';
 
 const ROBOCOTE_QUOTE_BASE_URL = process.env.ROBOCOTE_QUOTE_BASE_URL?.trim() ?? '';
 const ROBOCOTE_TENANT_ID = process.env.ROBOCOTE_TENANT_ID?.trim() || 'rpi';
@@ -417,11 +418,41 @@ async function triggerCalculate(
  * Processa uma mensagem inbound do WhatsApp.
  * Retorna o que foi enviado de volta (pra logging/teste), ou null se ignorou.
  */
+/**
+ * Descobre a CORRETORA dona da mensagem pela conta em que ela chegou.
+ *
+ * Regra do IROM: sistema que não sabe de quem é o lead não finge que sabe.
+ * Quando a conta não está cadastrada, o lead ainda é atendido (não se derruba
+ * conversa em produção por falta de cadastro) — mas a sessão fica MARCADA e o
+ * log grita, para o painel mostrar e alguém corrigir o cadastro.
+ */
+async function resolveTenant(
+  inbound: WhatsappInboundMessage,
+): Promise<{ tenantId: string; unresolved: boolean }> {
+  const accountId = inbound.channelAccountId?.trim();
+  if (!accountId) {
+    // Origem não propagada (canal legado): comportamento histórico, sem alarme.
+    return { tenantId: ROBOCOTE_TENANT_ID, unresolved: false };
+  }
+  const found = await resolveTenantForWhatsappAccount(accountId);
+  if (found) return { tenantId: found, unresolved: false };
+
+  console.warn(
+    `[tenant] conta de WhatsApp "${accountId}" nao esta cadastrada em whatsapp_instances — ` +
+    `lead atendido no tenant padrao "${ROBOCOTE_TENANT_ID}". Cadastre a instancia para o lead ir pra corretora certa.`,
+  );
+  return { tenantId: ROBOCOTE_TENANT_ID, unresolved: true };
+}
+
 export async function processWhatsappTurn(
   inbound: WhatsappInboundMessage,
   options: { tenantId?: string } = {},
 ): Promise<{ replySent: string | null; action: AssistantAction | 'greet' | 'calc_failed' | 'reset' | 'human_intervention' | 'human_paused' | 'human_handoff_back' | 'human_handoff_requested' | 'service_type' | 'branch_selected'; sessionAfter: SessionState | null }> {
-  const tenantId = options.tenantId ?? ROBOCOTE_TENANT_ID;
+  // Chamada interna com tenant explícito vence; senão, quem manda é a origem.
+  const resolvedTenant = options.tenantId
+    ? { tenantId: options.tenantId, unresolved: false }
+    : await resolveTenant(inbound);
+  const tenantId = resolvedTenant.tenantId;
   const key: SessionKey = { tenantId, channel: 'whatsapp', channelUserId: inbound.fromPhone };
 
   // ─── fromSelf=true: precisa distinguir o BOT (ignorar) do OPERADOR HUMANO (pausar agente) ──
@@ -461,6 +492,11 @@ export async function processWhatsappTurn(
   const isNew = !session;
   if (!session) {
     session = await sessionStore.upsert(createInitialSessionState(key));
+  }
+
+  // Detector: a sessão carrega a marca de que a corretora não foi identificada.
+  if (resolvedTenant.unresolved !== Boolean(session.tenantUnresolved)) {
+    session = { ...session, tenantUnresolved: resolvedTenant.unresolved };
   }
 
   // ─── Guarda de humanOverride: lead manda mensagem com operador ativo ─────────

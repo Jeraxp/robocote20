@@ -15,12 +15,14 @@ export function inbound(
   text: string,
   over: Partial<WhatsappInboundMessage> = {},
 ): WhatsappInboundMessage {
+  // Espalha `over` PRIMEIRO: campo novo do contrato (ex.: channelAccountId) passa
+  // a valer sem precisar editar a fábrica — foi assim que este fixture engoliu a
+  // origem da mensagem na primeira versão.
   return {
+    ...over,
     fromPhone: over.fromPhone ?? phone(1),
     text,
     fromSelf: over.fromSelf ?? false,
-    pushName: over.pushName,
-    messageId: over.messageId,
     timestamp: over.timestamp ?? new Date(0).toISOString(),
   };
 }

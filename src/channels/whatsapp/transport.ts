@@ -27,6 +27,12 @@ export interface WhatsappInboundMessage {
   messageId?: string;
   /** Timestamp ISO. */
   timestamp: string;
+  /**
+   * Conta do canal em que a mensagem chegou — o que identifica a CORRETORA.
+   * Evolution: nome da instância. Cloud API: `metadata.phone_number_id`.
+   * Opcional por compatibilidade com quem ainda não propaga.
+   */
+  channelAccountId?: string;
 }
 
 export interface SendTextResult {

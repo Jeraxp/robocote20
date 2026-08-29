@@ -64,6 +64,12 @@ CREATE TABLE IF NOT EXISTS whatsapp_instances (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- Número da Meta Cloud API que atende esta instância (identifica a corretora
+-- no webhook oficial, como `evolution_instance_name` faz no canal legado).
+ALTER TABLE whatsapp_instances ADD COLUMN IF NOT EXISTS cloud_phone_number_id text;
+CREATE UNIQUE INDEX IF NOT EXISTS whatsapp_instances_cloud_phone_number_id_key
+  ON whatsapp_instances (cloud_phone_number_id) WHERE cloud_phone_number_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS lead_sessions (
   tenant_id text NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   channel text NOT NULL CHECK (channel IN ('webchat', 'whatsapp')),

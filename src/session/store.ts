@@ -14,7 +14,12 @@ import type { CoveragePreference } from '../quote/summary.js';
 import { getPostgresPool, isPostgresConfigured } from '../db/postgres.js';
 
 export type SessionChannel = 'webchat' | 'whatsapp';
-export type PipelineStage = 'novos_leads' | 'contatados' | 'em_negociacao' | 'sem_retorno' | 'vendas' | 'perdido';
+/**
+ * `historico`: acervo espelhado do legado — lead antigo demais pra afirmar em que
+ * pé está. Não é "sem retorno" (isso afirmaria que houve tentativa sem resposta);
+ * é honestidade sobre o que não sabemos. Fica fora do funil ativo.
+ */
+export type PipelineStage = 'novos_leads' | 'contatados' | 'em_negociacao' | 'sem_retorno' | 'vendas' | 'perdido' | 'historico';
 
 const ACTIVE_STEPS = [
   'name',

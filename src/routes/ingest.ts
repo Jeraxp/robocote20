@@ -33,6 +33,7 @@ import {
   appendSessionInteraction,
   type SessionAnswer,
   type SessionState,
+  type PipelineStage,
 } from '../session/store.js';
 
 const INGEST_SECRET = process.env.ROBOCOTE_INGEST_SECRET?.trim() ?? '';
@@ -45,6 +46,14 @@ const INGEST_TENANTS = new Set(
 );
 const MAX_BATCH = 100;
 const MAX_BODY_BYTES = 512 * 1024;
+/**
+ * Lead do legado mais velho que isto nasce em `historico`, não em `novos_leads`:
+ * 99% do acervo espelhado é antigo, e afogar o funil do corretor em conversas de
+ * anos atrás transformaria o painel em ruído. 0 desliga a regra.
+ */
+const HISTORICO_DIAS = Number.isFinite(Number(process.env.ROBOCOTE_INGEST_HISTORICO_DIAS))
+  ? Number(process.env.ROBOCOTE_INGEST_HISTORICO_DIAS)
+  : 30;
 
 if (INGEST_SECRET && !process.env.ROBOCOTE_LEAD_TTL_DAYS) {
   console.warn('[ingest] AVISO: ROBOCOTE_LEAD_TTL_DAYS não configurado — leads espelhados expiram no TTL padrão de 7 dias.');
@@ -97,6 +106,16 @@ function answerOf(id: string, label: string, value: string): SessionAnswer {
 function firstNameFrom(value: string): string | null {
   const first = value.trim().split(/\s+/)[0] ?? '';
   return first ? first : null;
+}
+
+/**
+ * Estágio de um lead NOVO, pela idade real dele no legado (nunca pela data do
+ * espelho). Só vale na criação — estágio que o corretor moveu é intocável.
+ */
+function stageForNewLead(criadoEmMs: number | null): PipelineStage {
+  if (HISTORICO_DIAS <= 0 || criadoEmMs === null) return 'novos_leads';
+  const idadeMs = Date.now() - criadoEmMs;
+  return idadeMs > HISTORICO_DIAS * 24 * 60 * 60 * 1000 ? 'historico' : 'novos_leads';
 }
 
 interface IngestOutcome {
@@ -177,6 +196,8 @@ async function ingestOne(raw: unknown): Promise<IngestOutcome> {
     stepId: base.completed ? base.stepId : 'vehicle_brand',
     // Lead novo preserva o nascimento REAL no legado (não o instante do espelho).
     createdAt: existing ? base.createdAt : (criadoEmMs ?? base.createdAt),
+    // Estágio só na criação: o que o corretor arrastou no Kanban é soberano.
+    pipelineStage: existing ? base.pipelineStage : stageForNewLead(criadoEmMs),
   };
 
   if (contentChanged) {

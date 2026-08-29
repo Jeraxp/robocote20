@@ -203,6 +203,8 @@ const kanbanColumns = [
   { key: 'sem_retorno', label: 'Sem Retorno' },
   { key: 'vendas', label: 'Vendas' },
   { key: 'perdido', label: 'Perdido' },
+  // Acervo espelhado do legado — fora do funil ativo, por último de propósito.
+  { key: 'historico', label: 'Histórico' },
 ];
 
 const PANEL_TOKEN_STORAGE_KEY = 'robocote.panelToken';

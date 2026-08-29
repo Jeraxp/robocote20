@@ -1049,17 +1049,37 @@ api.post('/assistente/rag/search', async (c) => {
   }
 });
 
+/**
+ * Janela do painel. Com o legado espelhado, uma corretora pode ter dezenas de
+ * milhares de leads; o painel mostra os mais recentes e informa o total real.
+ * Override por `?limit=` até PANEL_LEADS_MAX (o teto protege a memória do processo).
+ */
+const PANEL_LEADS_DEFAULT = Math.max(1, Number(process.env.ROBOCOTE_PANEL_LEADS_LIMIT) || 500);
+const PANEL_LEADS_MAX = Math.max(PANEL_LEADS_DEFAULT, Number(process.env.ROBOCOTE_PANEL_LEADS_MAX) || 5000);
+
+function resolvePanelLimit(raw: string | undefined): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return PANEL_LEADS_DEFAULT;
+  return Math.min(Math.floor(parsed), PANEL_LEADS_MAX);
+}
+
 api.get('/painel/leads', async (c) => {
   const denied = requirePanelAccess(c);
   if (denied) return denied;
 
   const auth = resolveAuthContext(c);
-  const sessions = await sessionStore.list(tenantScope(auth));
+  const scope = tenantScope(auth);
+  const limit = resolvePanelLimit(c.req.query('limit'));
+  const [sessions, stored] = await Promise.all([
+    sessionStore.list({ ...scope, limit }),
+    sessionStore.count(scope),
+  ]);
   const leads = sessions.map(serializeLead);
   return c.json({
     ok: true,
     auth,
     metrics: panelMetrics(leads),
+    window: { limit, returned: leads.length, stored, truncated: stored > leads.length },
     leads,
     ts: new Date().toISOString(),
   });
@@ -1148,8 +1168,7 @@ api.patch('/painel/leads/:id/stage', async (c) => {
     return c.json({ ok: false, error: 'stage inválido' }, 400);
   }
 
-  const sessions = await sessionStore.list(tenantScope(auth));
-  const session = sessions.find((item) => stableLeadId(item) === id);
+  const session = await sessionStore.findBy(tenantScope(auth), (item) => stableLeadId(item) === id);
   if (!session) {
     return c.json({ ok: false, error: 'lead não encontrado' }, 404);
   }
@@ -1184,8 +1203,7 @@ api.post('/painel/leads/:id/override', async (c) => {
   }
 
   const auth = resolveAuthContext(c);
-  const sessions = await sessionStore.list(tenantScope(auth));
-  const session = sessions.find((item) => stableLeadId(item) === id);
+  const session = await sessionStore.findBy(tenantScope(auth), (item) => stableLeadId(item) === id);
   if (!session) {
     return c.json({ ok: false, error: 'lead não encontrado' }, 404);
   }

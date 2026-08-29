@@ -160,7 +160,23 @@ export interface SessionKey {
 
 export interface SessionStore {
   get(key: SessionKey): Promise<SessionState | null>;
-  list(filter?: { tenantId?: string }): Promise<SessionState[]>;
+  /**
+   * Leads do mais recente pro mais antigo. `limit` é OBRIGATÓRIO na prática pro
+   * painel: com o espelho do legado, um tenant pode ter dezenas de milhares de
+   * leads — carregar tudo estoura a memória do processo.
+   */
+  list(filter?: { tenantId?: string; limit?: number }): Promise<SessionState[]>;
+  /** Quantos leads existem de fato (o painel mostra uma janela; isto é o total). */
+  count(filter?: { tenantId?: string }): Promise<number>;
+  /**
+   * Primeiro lead que satisfaz o predicado, varrendo em lotes (memória constante).
+   * Existe porque o id do painel é um hash — não dá pra consultar direto no banco,
+   * e carregar a base inteira pra achar um lead não escala com o legado espelhado.
+   */
+  findBy(
+    filter: { tenantId?: string },
+    predicate: (state: SessionState) => boolean,
+  ): Promise<SessionState | null>;
   upsert(state: SessionState): Promise<SessionState>;
   delete(key: SessionKey): Promise<void>;
   size(): Promise<number>;
@@ -216,12 +232,32 @@ export class InMemorySessionStore implements SessionStore {
     return entry.state;
   }
 
-  async list(filter: { tenantId?: string } = {}): Promise<SessionState[]> {
+  async list(filter: { tenantId?: string; limit?: number } = {}): Promise<SessionState[]> {
     this.cleanupExpired();
-    return [...this.store.values()]
+    const ordered = [...this.store.values()]
       .map((entry) => entry.state)
       .filter((state) => !filter.tenantId || state.tenantId === filter.tenantId)
       .sort((a, b) => b.updatedAt - a.updatedAt);
+    return filter.limit && filter.limit > 0 ? ordered.slice(0, filter.limit) : ordered;
+  }
+
+  async count(filter: { tenantId?: string } = {}): Promise<number> {
+    this.cleanupExpired();
+    return [...this.store.values()]
+      .filter((entry) => !filter.tenantId || entry.state.tenantId === filter.tenantId)
+      .length;
+  }
+
+  async findBy(
+    filter: { tenantId?: string },
+    predicate: (state: SessionState) => boolean,
+  ): Promise<SessionState | null> {
+    this.cleanupExpired();
+    for (const entry of this.store.values()) {
+      if (filter.tenantId && entry.state.tenantId !== filter.tenantId) continue;
+      if (predicate(entry.state)) return entry.state;
+    }
+    return null;
   }
 
   async upsert(state: SessionState): Promise<SessionState> {
@@ -271,22 +307,71 @@ export class PostgresSessionStore implements SessionStore {
     return state ?? null;
   }
 
-  async list(filter: { tenantId?: string } = {}): Promise<SessionState[]> {
+  async list(filter: { tenantId?: string; limit?: number } = {}): Promise<SessionState[]> {
     const pool = getPostgresPool();
+    // LIMIT no banco (não em JS): com o legado espelhado são dezenas de milhares
+    // de linhas jsonb — trazer tudo pro processo é o caminho curto pro OOM.
+    const limit = filter.limit && filter.limit > 0 ? Math.floor(filter.limit) : null;
+    const limitSql = limit ? ` limit ${limit}` : '';
     const result = filter.tenantId
       ? await pool.query(
           `select state from lead_sessions
            where tenant_id = $1 and expires_at > now()
-           order by updated_at desc`,
+           order by updated_at desc${limitSql}`,
           [filter.tenantId],
         )
       : await pool.query(
           `select state from lead_sessions
            where expires_at > now()
-           order by updated_at desc`,
+           order by updated_at desc${limitSql}`,
         );
 
     return result.rows.map((row) => row.state as SessionState);
+  }
+
+  async count(filter: { tenantId?: string } = {}): Promise<number> {
+    const pool = getPostgresPool();
+    const result = filter.tenantId
+      ? await pool.query(
+          'select count(*)::int as total from lead_sessions where tenant_id = $1 and expires_at > now()',
+          [filter.tenantId],
+        )
+      : await pool.query('select count(*)::int as total from lead_sessions where expires_at > now()');
+    return Number(result.rows[0]?.total ?? 0);
+  }
+
+  async findBy(
+    filter: { tenantId?: string },
+    predicate: (state: SessionState) => boolean,
+  ): Promise<SessionState | null> {
+    const pool = getPostgresPool();
+    const batch = 500;
+    let offset = 0;
+    // Ordem pela PK (estável): o espelho reescreve updated_at o tempo todo, e
+    // paginar por ele faria linhas pularem de página no meio da varredura.
+    for (;;) {
+      const result = filter.tenantId
+        ? await pool.query(
+            `select state from lead_sessions
+             where tenant_id = $1 and expires_at > now()
+             order by tenant_id, channel, channel_user_id
+             limit ${batch} offset ${offset}`,
+            [filter.tenantId],
+          )
+        : await pool.query(
+            `select state from lead_sessions
+             where expires_at > now()
+             order by tenant_id, channel, channel_user_id
+             limit ${batch} offset ${offset}`,
+          );
+
+      for (const row of result.rows) {
+        const state = row.state as SessionState;
+        if (predicate(state)) return state;
+      }
+      if (result.rows.length < batch) return null;
+      offset += batch;
+    }
   }
 
   async upsert(state: SessionState): Promise<SessionState> {

@@ -5,6 +5,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { test } from './routes/test.js';
 import { api } from './routes/api.js';
 import { ingest } from './routes/ingest.js';
+import { chat } from './routes/chat.js';
 import { whatsapp } from './routes/whatsapp.js';
 import { getAssistantModelConfig } from './assistant/autoF1.js';
 import { getRagConfig } from './assistant/rag.js';
@@ -58,6 +59,7 @@ app.get('/health', (c) => {
 app.route('/test', test);
 app.route('/api', api);
 app.route('/api/ingest', ingest);
+app.route('/api/chat', chat);
 app.route('/webhooks', whatsapp);
 
 app.use('/public/*', serveStatic({ root: './' }));

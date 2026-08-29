@@ -12,7 +12,11 @@
     "typecheck:api": "tsc -p tsconfig.json --noEmit",
     "typecheck:web": "tsc -p tsconfig.frontend.json --noEmit",
     "build:web": "vite build",
-    "build": "npm run typecheck && npm run build:web"
+    "build": "npm run typecheck && npm run build:web",
+    "test": "node --import tsx --experimental-test-module-mocks --disable-warning=ExperimentalWarning --test \"tests/**/*.test.ts\"",
+    "test:watch": "node --import tsx --experimental-test-module-mocks --disable-warning=ExperimentalWarning --test --watch \"tests/**/*.test.ts\"",
+    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
+    "verify": "npm run typecheck && npm run typecheck:test && npm test"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

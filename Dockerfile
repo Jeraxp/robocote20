@@ -18,6 +18,8 @@ COPY persona ./persona
 # public/index.html é estático (bancada técnica) — preserva no builder
 # pra que ele e o quote-room/ buildado coexistam no /app/public final.
 COPY public/index.html ./public/index.html
+# Bancada de teste manual (/teste) — estática, também precisa sobreviver ao build.
+COPY public/teste ./public/teste
 
 # Builda o frontend (vai pra public/quote-room/).
 RUN npm run build:web

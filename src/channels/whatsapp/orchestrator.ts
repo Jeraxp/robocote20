@@ -34,6 +34,7 @@ import { cacheQuoteContext } from '../../quote/contextCache.js';
 import { getTenantActiveRamos, isVehicleRamo, VEHICLE_RAMOS, type VehicleRamo } from '../../tenant/quoteConfig.js';
 import { resolveTenantForWhatsappAccount } from '../../tenant/whatsappAccount.js';
 import { runConversationTurn, type TurnResult } from '../../core/conversation/turn.js';
+import { isMensagemRepetida } from './dedup.js';
 
 
 const ROBOCOTE_TENANT_ID = process.env.ROBOCOTE_TENANT_ID?.trim() || 'rpi';
@@ -100,6 +101,13 @@ export async function processWhatsappTurn(
   inbound: WhatsappInboundMessage,
   options: { tenantId?: string } = {},
 ): Promise<{ replySent: string | null; action: AssistantAction | 'greet' | 'calc_failed' | 'reset' | 'human_intervention' | 'human_paused' | 'human_handoff_back' | 'human_handoff_requested' | 'service_type' | 'branch_selected'; sessionAfter: SessionState | null }> {
+  // ─── Re-entrega: a Meta reenvia o mesmo wamid; o gateway pode re-despachar ────
+  // Processar duas vezes faria o lead ouvir a resposta repetida e a jornada andar
+  // dois passos com uma frase só. Contrato v2: idempotência é responsabilidade nossa.
+  if (isMensagemRepetida(inbound.messageId)) {
+    return { replySent: null, action: 'none', sessionAfter: null };
+  }
+
   // Chamada interna com tenant explícito vence; senão, quem manda é a origem.
   const resolvedTenant = options.tenantId
     ? { tenantId: options.tenantId, unresolved: false }

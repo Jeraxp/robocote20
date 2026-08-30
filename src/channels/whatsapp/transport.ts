@@ -2,16 +2,25 @@
  * Fachada de transporte WhatsApp — o orquestrador fala com ELA, nunca com um canal direto.
  *
  * Canais disponíveis:
- *  - 'cloudapi'  → API oficial da Meta (Cloud API). Canal padrão do produto (decisão 2026-08-23).
- *  - 'evolution' → Evolution API (não-oficial, QR). Legado em extinção; some quando o último cliente migrar.
+ *  - 'gateway'   → gateway oficial da Taskdun (arquitetura A, contrato v2 de 30/08/2026).
+ *                  O gateway é dono do número e do token da Meta; o motor só conversa.
+ *                  PADRÃO do produto daqui pra frente.
+ *  - 'cloudapi'  → fala direto com a Graph API da Meta. Só para número que o motor
+ *                  possua sozinho, sem gateway na frente.
+ *  - 'evolution' → API não-oficial, QR. Legado em extinção; some quando o último cliente migrar.
  *
  * Seleção:
- *  - WHATSAPP_CHANNEL=cloudapi|evolution força o canal explicitamente.
- *  - Sem env: auto — usa cloudapi se configurado, senão cai pro evolution (back-compat).
+ *  - WHATSAPP_CHANNEL=gateway|cloudapi|evolution força o canal explicitamente.
+ *  - Sem env: auto — gateway se configurado, senão cloudapi se configurado, senão evolution.
+ *
+ * Observação de ENTRADA: com o gateway na frente, o webhook continua chegando no
+ * formato NATIVO da Meta (o gateway repassa os bytes exatos, reassinados). Por isso
+ * o parser de `cloudapi.ts` serve aos dois — só o ENVIO muda de porta.
  */
 
 import * as cloudapi from './cloudapi.js';
 import * as evolution from './evolution.js';
+import * as gateway from './gateway.js';
 
 /** Contrato neutro de mensagem inbound — mesmo shape nos dois canais. */
 export interface WhatsappInboundMessage {
@@ -42,25 +51,35 @@ export interface SendTextResult {
   error?: string;
 }
 
-export type WhatsappChannel = 'cloudapi' | 'evolution';
+export type WhatsappChannel = 'gateway' | 'cloudapi' | 'evolution';
 
-const CHANNEL_ENV = process.env.WHATSAPP_CHANNEL?.trim().toLowerCase() ?? '';
+/** Lido na HORA da chamada — env congelada em const é intestável e amarra o boot. */
+function channelEnv(): string {
+  return process.env.WHATSAPP_CHANNEL?.trim().toLowerCase() ?? '';
+}
 
 export function getActiveWhatsappChannel(): WhatsappChannel {
-  if (CHANNEL_ENV === 'cloudapi' || CHANNEL_ENV === 'evolution') return CHANNEL_ENV;
+  const forcado = channelEnv();
+  if (forcado === 'gateway' || forcado === 'cloudapi' || forcado === 'evolution') return forcado;
+  if (gateway.isGatewayConfigured()) return 'gateway';
   return cloudapi.isCloudApiConfigured() ? 'cloudapi' : 'evolution';
 }
 
 /** Envia texto pelo canal ativo. */
 export async function sendWhatsappText(toPhone: string, text: string): Promise<SendTextResult> {
-  return getActiveWhatsappChannel() === 'cloudapi'
-    ? cloudapi.sendWhatsappText(toPhone, text)
-    : evolution.sendWhatsappText(toPhone, text);
+  switch (getActiveWhatsappChannel()) {
+    case 'gateway':
+      return gateway.sendWhatsappText(toPhone, text);
+    case 'cloudapi':
+      return cloudapi.sendWhatsappText(toPhone, text);
+    default:
+      return evolution.sendWhatsappText(toPhone, text);
+  }
 }
 
 /**
  * Dedup anti-eco: só faz sentido no evolution (webhook devolve o que o bot mandou).
- * No cloudapi o webhook nunca traz mensagem do bot — sempre false.
+ * Nos canais oficiais (gateway/cloudapi) o webhook nunca traz mensagem do bot — sempre false.
  */
 export function wasMessageSentByBot(fromPhone: string, text: string): boolean {
   return getActiveWhatsappChannel() === 'evolution'

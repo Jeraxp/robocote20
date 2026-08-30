@@ -23,8 +23,15 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 const CLOUD_TOKEN = process.env.WHATSAPP_CLOUD_TOKEN?.trim() ?? '';
 const CLOUD_PHONE_NUMBER_ID = process.env.WHATSAPP_CLOUD_PHONE_NUMBER_ID?.trim() ?? '';
 const CLOUD_VERIFY_TOKEN = process.env.WHATSAPP_CLOUD_VERIFY_TOKEN?.trim() ?? '';
-const CLOUD_APP_SECRET = process.env.WHATSAPP_CLOUD_APP_SECRET?.trim() ?? '';
 const CLOUD_GRAPH_VERSION = process.env.WHATSAPP_CLOUD_GRAPH_VERSION?.trim() || 'v23.0';
+
+/**
+ * App Secret lido na HORA da chamada (não congelado no import).
+ * O segredo pode chegar depois do boot — e const congelada em env é intestável.
+ */
+function cloudAppSecret(): string {
+  return process.env.WHATSAPP_CLOUD_APP_SECRET?.trim() ?? '';
+}
 
 /** Mesmo shape do inbound da Evolution — contrato neutro consumido pelo orquestrador. */
 export interface CloudApiInboundMessage {
@@ -67,7 +74,7 @@ export function getCloudApiConfig(): {
     phoneNumberId: CLOUD_PHONE_NUMBER_ID,
     graphVersion: CLOUD_GRAPH_VERSION,
     verifyTokenConfigured: Boolean(CLOUD_VERIFY_TOKEN),
-    appSecretConfigured: Boolean(CLOUD_APP_SECRET),
+    appSecretConfigured: Boolean(cloudAppSecret()),
   };
 }
 
@@ -95,14 +102,21 @@ export function handleWebhookVerification(
 
 /**
  * Valida a assinatura `X-Hub-Signature-256: sha256=<hmac>` do corpo CRU do POST.
- * Sem APP_SECRET configurado, aceita (e o health expõe `appSecretConfigured: false`
- * pra esse afrouxamento nunca passar despercebido).
+ *
+ * FALHA FECHADA: sem APP_SECRET configurado, RECUSA tudo.
+ *
+ * A versão anterior aceitava (fail-open) e isso era uma porta escancarada: a URL
+ * do webhook é pública por natureza — quem a descobrisse criaria conversa, queimaria
+ * token de IA e injetaria lead falso no painel, e nada no sistema pareceria invasão.
+ * Mesma regra do handshake logo acima: sem segredo, sem entrada. Se o health mostrar
+ * `appSecretConfigured: false`, o canal está SURDO de propósito, não frouxo.
  */
 export function verifyCloudApiSignature(rawBody: string, signatureHeader: string | null | undefined): boolean {
-  if (!CLOUD_APP_SECRET) return true;
+  const secret = cloudAppSecret();
+  if (!secret) return false;
   if (!signatureHeader?.startsWith('sha256=')) return false;
   const received = signatureHeader.slice('sha256='.length).trim();
-  const expected = createHmac('sha256', CLOUD_APP_SECRET).update(rawBody, 'utf8').digest('hex');
+  const expected = createHmac('sha256', secret).update(rawBody, 'utf8').digest('hex');
   const a = Buffer.from(received, 'utf8');
   const b = Buffer.from(expected, 'utf8');
   if (a.length !== b.length) return false;

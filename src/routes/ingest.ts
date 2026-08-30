@@ -120,7 +120,7 @@ function stageForNewLead(criadoEmMs: number | null): PipelineStage {
 
 interface IngestOutcome {
   protocolo: string;
-  resultado: 'criado' | 'atualizado' | 'inalterado' | 'rejeitado' | 'erro_interno';
+  resultado: 'criado' | 'atualizado' | 'inalterado' | 'rejeitado' | 'erro_interno' | 'ignorado';
   motivo?: string;
 }
 
@@ -153,6 +153,15 @@ async function ingestOne(raw: unknown): Promise<IngestOutcome> {
   const origem = cleanText(record.origem, 80) || 'legado';
   const criadoEmMs = parseIsoMs(record.criadoEm);
   const atualizadoEmMs = parseIsoMs(record.atualizadoEm);
+
+  // Sem forma de CONTATO, o lead é inútil pro corretor: ele não tem como ligar
+  // nem escrever. São conversas abertas e abandonadas sem responder nada — 72%
+  // do acervo do legado. Não criamos (poluiria o painel), e não é erro: é lead
+  // que ainda não existe. No instante em que a pessoa der telefone ou e-mail, o
+  // observador re-envia com o dado e aí o lead nasce. (Jera 2026-08-30)
+  if (!whatsapp && !email) {
+    return { protocolo, resultado: 'ignorado', motivo: 'sem telefone nem e-mail — nada para contatar' };
+  }
 
   // Chave sintética 1:1 com a conversa do legado — canal webchat (origem real do lead).
   const key = { tenantId, channel: 'webchat' as const, channelUserId: `legado:${protocolo}` };
@@ -256,6 +265,7 @@ ingest.post('/leads', bodyLimit({ maxSize: MAX_BODY_BYTES }), async (c) => {
     atualizados: resultados.filter((r) => r.resultado === 'atualizado').length,
     inalterados: resultados.filter((r) => r.resultado === 'inalterado').length,
     rejeitados: resultados.filter((r) => r.resultado === 'rejeitado').length,
+    ignorados: resultados.filter((r) => r.resultado === 'ignorado').length,
     erros_internos: resultados.filter((r) => r.resultado === 'erro_interno').length,
   };
 
@@ -266,7 +276,7 @@ ingest.post('/leads', bodyLimit({ maxSize: MAX_BODY_BYTES }), async (c) => {
     porTenant.set(t, (porTenant.get(t) ?? 0) + 1);
   }
   console.log(`[ingest] lote ${list.length} leads (${[...porTenant.entries()].map(([t, n]) => `${t}:${n}`).join(', ')}): ` +
-    `+${tally.criados} ~${tally.atualizados} =${tally.inalterados} x${tally.rejeitados} !${tally.erros_internos}`);
+    `+${tally.criados} ~${tally.atualizados} =${tally.inalterados} x${tally.rejeitados} ?${tally.ignorados} !${tally.erros_internos}`);
 
   if (tally.erros_internos > 0) {
     return c.json({ ok: false, error: 'falha de persistência — re-tente o lote', ...tally, resultados }, 503);

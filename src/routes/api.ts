@@ -686,6 +686,9 @@ api.get('/admin/me', async (c) => {
     tenants,
     navigation: [
       { key: 'leads', label: 'Leads / CRM', enabled: true },
+      // Conversas: acompanhar o diálogo IA↔lead ao vivo (Etapa A, só leitura).
+      // Todo papel vê — o operador é justamente quem mais precisa desta tela.
+      { key: 'conversas', label: 'Conversas', enabled: true },
       { key: 'tenants', label: 'Corretoras', enabled: auth.isSuperadmin },
       { key: 'users', label: 'Usuários', enabled: canManageUsers(auth) },
       { key: 'whatsapp', label: 'WhatsApp', enabled: canManageWhatsapp(auth) },

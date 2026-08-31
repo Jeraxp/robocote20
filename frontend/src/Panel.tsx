@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { JSX } from 'react';
 import { StepCoverageAuto, DEFAULT_COVERAGE_AUTO } from './StepCoverageAuto';
 import { StepCoverageResidencial, DEFAULT_COVERAGE_RESIDENCIAL } from './StepCoverageResidencial';
@@ -192,7 +192,7 @@ interface WhatsappForm {
   createInEvolution: boolean;
 }
 
-type PanelSection = 'leads' | 'tenants' | 'users' | 'whatsapp' | 'settings' | 'support';
+type PanelSection = 'leads' | 'conversas' | 'tenants' | 'users' | 'whatsapp' | 'settings' | 'support';
 
 type PanelErrorResponse = { ok: false; error?: string; authRequired?: boolean };
 
@@ -755,6 +755,212 @@ function ConversationPanel({ lead }: { lead: PanelLead | null }): JSX.Element {
   );
 }
 
+/**
+ * Última atividade DE CONVERSA — nunca o updatedAt da sessão.
+ * O espelho do legado reescreve updated_at o tempo todo; confiar nele faria
+ * lead do acervo "furar a fila" na lista sem ninguém ter dito uma palavra.
+ */
+function lastConversationAt(lead: PanelLead): number {
+  for (let i = lead.interactions.length - 1; i >= 0; i--) {
+    const item = lead.interactions[i];
+    if (item.direction === 'inbound' || item.direction === 'outbound') {
+      const ts = new Date(item.at).getTime();
+      if (Number.isFinite(ts)) return ts;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Conversa DE VERDADE = pelo menos uma fala de gente ou do agente.
+ * Sem este filtro, os 150 mil leads do acervo (interações só de sistema,
+ * carimbo do espelho) afogariam a lista no primeiro scroll.
+ */
+function hasRealConversation(lead: PanelLead): boolean {
+  return lead.interactions.some((item) => item.direction === 'inbound' || item.direction === 'outbound');
+}
+
+/** Hora se foi hoje; dia/mês + hora se foi antes. */
+function formatConversaTime(ts: number): string {
+  if (!ts) return '';
+  const date = new Date(ts);
+  const hoje = new Date();
+  const mesmoDia = date.toDateString() === hoje.toDateString();
+  return new Intl.DateTimeFormat('pt-BR', mesmoDia
+    ? { hour: '2-digit', minute: '2-digit' }
+    : { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date);
+}
+
+const channelBadge: Record<PanelLead['channel'], string> = {
+  whatsapp: 'WhatsApp',
+  webchat: 'Webchat',
+};
+
+/**
+ * Carimbo de ação traduzido pro corretor. O que não está aqui é mecânica
+ * interna (answer_step, none…) e fica invisível — carimbo é pra marcar
+ * momento que muda a conversa, não pra ensinar o vocabulário do motor.
+ */
+const actionLabels: Record<string, string> = {
+  greet: 'saudação',
+  service_type: 'escolha de atendimento',
+  branch_selected: 'ramo escolhido',
+  calculate: 'cotação disparada',
+  calc_failed: 'falha na cotação',
+  reset: 'conversa reiniciada',
+  human_handoff_requested: 'atendente solicitado',
+  human_handoff_back: 'agente reassumiu',
+  human_intervention: 'humano respondeu',
+  human_paused: 'agente pausado',
+};
+
+/**
+ * Aba Conversas — Etapa A: acompanhar, não intervir (decisão Jera 2026-08-30).
+ *
+ * Lista à esquerda, linha do tempo à direita, tudo alimentado pelo MESMO
+ * payload/polling de 10s que o resto do painel já usa — zero endpoint novo.
+ * O botão de assumir a conversa é a Etapa B, desenhada em separado porque
+ * mexe em conversa com cliente real.
+ */
+function ConversasSection({ leads }: { leads: PanelLead[] }): JSX.Element {
+  const [query, setQuery] = useState('');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const feedRef = useRef<HTMLDivElement | null>(null);
+
+  const conversas = useMemo(() => {
+    const term = query.trim().toLowerCase();
+    return leads
+      .filter(hasRealConversation)
+      .filter((lead) => {
+        if (!term) return true;
+        return (
+          lead.name.toLowerCase().includes(term) ||
+          lead.channelUser.toLowerCase().includes(term) ||
+          (lead.latestMessage ?? '').toLowerCase().includes(term)
+        );
+      })
+      .sort((a, b) => lastConversationAt(b) - lastConversationAt(a));
+  }, [leads, query]);
+
+  // Mais de uma corretora na lista? Mostra a etiqueta (visão de superadmin).
+  const multiTenant = useMemo(
+    () => new Set(conversas.map((c) => c.tenantId)).size > 1,
+    [conversas],
+  );
+
+  const selected = conversas.find((c) => c.id === selectedId) ?? conversas[0] ?? null;
+
+  // Conversa nova ao vivo: mantém o feed grudado no fim, como um chat de verdade.
+  const lastInteractionId = selected?.interactions.at(-1)?.id ?? null;
+  useEffect(() => {
+    const feed = feedRef.current;
+    if (feed) feed.scrollTop = feed.scrollHeight;
+  }, [selected?.id, lastInteractionId]);
+
+  return (
+    <section className="panel-section-page conversas-page">
+      <header className="panel-hero compact">
+        <div>
+          <h1>Conversas</h1>
+          <p>O agente atende, você acompanha ao vivo — cada fala carimbada.</p>
+        </div>
+      </header>
+
+      <div className="panel-surface conversas-shell">
+        <aside className="conversas-list">
+          <label className="panel-search">
+            <Search size={16} />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Buscar por nome, telefone ou mensagem"
+            />
+          </label>
+
+          <div className="conversas-scroll">
+            {conversas.length === 0 ? (
+              <div className="conversation-empty">
+                <MessageCircle size={26} />
+                <p>{query ? 'Nada encontrado com essa busca.' : 'Nenhuma conversa ainda. Quando um lead falar com o agente, ela nasce aqui.'}</p>
+              </div>
+            ) : (
+              conversas.map((lead) => {
+                const ativa = selected?.id === lead.id;
+                return (
+                  <button
+                    key={lead.id}
+                    type="button"
+                    className={`conversa-item${ativa ? ' is-active' : ''}`}
+                    onClick={() => setSelectedId(lead.id)}
+                  >
+                    <div className="conversa-item-top">
+                      <strong>{lead.name}</strong>
+                      <time>{formatConversaTime(lastConversationAt(lead))}</time>
+                    </div>
+                    <div className="conversa-item-tags">
+                      <span className={`conversa-canal is-${lead.channel}`}>{channelBadge[lead.channel]}</span>
+                      {multiTenant ? <span className="conversa-tenant">{lead.tenantId}</span> : null}
+                      {lead.humanOverride?.active ? <span className="conversa-humano">humano na linha</span> : null}
+                    </div>
+                    <p>{lead.latestMessage ?? 'Sem mensagens ainda.'}</p>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </aside>
+
+        <div className="conversas-thread">
+          {selected ? (
+            <>
+              <header className="conversas-thread-header">
+                <div>
+                  <h2>{selected.name}</h2>
+                  <p>
+                    {/* Telefone é identidade útil; id interno de webchat é ruído. */}
+                    {selected.channel === 'whatsapp' ? `${selected.channelUser} · ` : ''}
+                    {channelBadge[selected.channel]}
+                    {multiTenant ? ` · ${selected.tenantId}` : ''}
+                  </p>
+                </div>
+                <div className="conversas-thread-meta">
+                  <StatusPill status={selected.status} />
+                  {selected.quoteRoomPath ? (
+                    <a className="conversa-quote-link" href={selected.quoteRoomPath} target="_blank" rel="noreferrer">
+                      Ver cotação
+                    </a>
+                  ) : null}
+                </div>
+              </header>
+              <div className="conversation-feed conversas-feed" ref={feedRef}>
+                {selected.interactions
+                  .filter((item) => item.direction !== 'system')
+                  .map((item) => (
+                    <article key={item.id} className={`panel-message ${item.direction}`}>
+                      <div className="panel-message-meta">
+                        <span>{item.direction === 'inbound' ? selected.firstName ?? 'Lead' : 'Agente'}</span>
+                        <time>{formatDateTime(item.at)}</time>
+                      </div>
+                      <p>{item.text}</p>
+                      {item.action && actionLabels[item.action] ? (
+                        <small>{actionLabels[item.action]}</small>
+                      ) : null}
+                    </article>
+                  ))}
+              </div>
+            </>
+          ) : (
+            <div className="conversation-empty conversas-vazia">
+              <MessageCircle size={34} />
+              <p>Escolha uma conversa na lista para acompanhar.</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function LeadDetails({ lead }: { lead: PanelLead | null }): JSX.Element {
   if (!lead) {
     return (
@@ -898,6 +1104,7 @@ function LeadModal({
 
 const sectionIcons: Record<PanelSection, typeof Activity> = {
   leads: LayoutDashboard,
+  conversas: MessageCircle,
   tenants: Building2,
   users: UsersRound,
   whatsapp: Smartphone,
@@ -924,6 +1131,7 @@ function PanelSidebar({
 }): JSX.Element {
   const nav = admin?.navigation ?? [
     { key: 'leads' as const, label: 'Leads / CRM', enabled: true },
+    { key: 'conversas' as const, label: 'Conversas', enabled: true },
     { key: 'tenants' as const, label: 'Corretoras', enabled: false },
     { key: 'users' as const, label: 'Usuários', enabled: false },
     { key: 'whatsapp' as const, label: 'WhatsApp', enabled: false },
@@ -2409,6 +2617,8 @@ export function Panel(): JSX.Element {
               </div>
             </section>
           </>
+        ) : activeSection === 'conversas' ? (
+          <ConversasSection leads={leads} />
         ) : activeSection === 'tenants' ? (
           <TenantsSection
             tenants={tenants}

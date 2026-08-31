@@ -3255,3 +3255,144 @@ td {
   white-space: nowrap;
 }
 .tenant-access-btn:hover { background: var(--orange); color: #fff; }
+
+/* ─── Aba Conversas (Etapa A: acompanhar ao vivo) ────────────────────────────
+   Reusa os balões .panel-message do modal de lead; aqui só mora o layout
+   de duas colunas e os itens da lista. Cor continua sendo só semântica. */
+.conversas-shell {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  min-height: 640px;
+  overflow: hidden;
+  padding: 0;
+}
+
+.conversas-list {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  min-height: 0;
+}
+
+.conversas-list .panel-search {
+  margin: 14px 14px 10px;
+}
+
+.conversas-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.conversa-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  padding: 12px 14px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.conversa-item:hover { background: var(--surface-soft); }
+.conversa-item.is-active {
+  background: var(--surface-soft);
+  box-shadow: inset 3px 0 0 var(--orange);
+}
+
+.conversa-item-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.conversa-item-top strong {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conversa-item-top time {
+  font-size: 10px;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.conversa-item-tags {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0;
+  flex-wrap: wrap;
+}
+.conversa-canal,
+.conversa-tenant,
+.conversa-humano {
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.conversa-canal.is-whatsapp { background: var(--green-soft); color: var(--green); }
+.conversa-canal.is-webchat { background: var(--blue-soft); color: var(--blue); }
+.conversa-tenant { background: var(--surface-soft); color: var(--muted); border: 1px solid var(--line); }
+/* Humano na linha = estado que muda decisão de quem olha — âmbar de verdade. */
+.conversa-humano { background: #fff3d6; color: #9a6b00; }
+
+.conversa-item p {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversas-thread {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.conversas-thread-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.conversas-thread-header h2 { margin: 0; font-size: 15px; }
+.conversas-thread-header p { margin: 2px 0 0; font-size: 11.5px; color: var(--muted); }
+.conversas-thread-meta { display: flex; align-items: center; gap: 10px; }
+
+.conversa-quote-link {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--blue);
+  text-decoration: none;
+}
+.conversa-quote-link:hover { text-decoration: underline; }
+
+.conversas-feed {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 18px;
+  min-height: 0;
+}
+
+.conversas-vazia {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted);
+}
+
+@media (max-width: 900px) {
+  .conversas-shell { grid-template-columns: 1fr; }
+  .conversas-list { border-right: none; border-bottom: 1px solid var(--line); max-height: 300px; }
+}

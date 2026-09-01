@@ -49,6 +49,12 @@ export interface CloudApiInboundMessage {
   timestamp: string;
   /** Número que RECEBEU a mensagem (`metadata.phone_number_id`) — identifica a corretora. */
   channelAccountId?: string;
+  /**
+   * Tipo da mensagem quando NÃO é texto (audio, image, document, sticker…).
+   * Antes o parser descartava em silêncio e o lead ficava falando com o vazio.
+   * Agora o orquestrador responde educadamente — sem avançar a jornada.
+   */
+  unsupportedType?: string;
 }
 
 export interface SendTextResult {
@@ -171,26 +177,35 @@ export function parseCloudApiInboundMessages(payload: CloudApiWebhookPayload): C
       const messages = Array.isArray(value.messages) ? value.messages : [];
       for (const message of messages) {
         const messageRec = asRecord(message);
-        if (messageRec.type !== 'text') continue; // mídia/áudio: próxima rodada
         const from = typeof messageRec.from === 'string' ? normalizePhone(messageRec.from) : '';
-        const text = asRecord(messageRec.text).body;
-        if (!from || typeof text !== 'string' || !text.trim()) continue;
+        if (!from) continue;
+        const kind = typeof messageRec.type === 'string' ? messageRec.type : 'unknown';
 
         const timestamp = (() => {
           const ts = messageRec.timestamp;
           const parsed = typeof ts === 'string' ? Number(ts) : typeof ts === 'number' ? ts : NaN;
           return Number.isFinite(parsed) ? new Date(parsed * 1000).toISOString() : new Date().toISOString();
         })();
-
-        result.push({
+        const base = {
           fromPhone: from,
-          text: text.trim(),
           fromSelf: false,
           channelAccountId: accountId,
           pushName: nameByWaId.get(from) ?? nameByWaId.values().next().value,
           messageId: typeof messageRec.id === 'string' ? messageRec.id : undefined,
           timestamp,
-        });
+        };
+
+        if (kind !== 'text') {
+          // Áudio, imagem, documento, figurinha… O lead falou; o motor responde
+          // que só lê texto. Reações (`reaction`) são ignoradas: não são fala.
+          if (kind === 'reaction') continue;
+          result.push({ ...base, text: '', unsupportedType: kind });
+          continue;
+        }
+
+        const text = asRecord(messageRec.text).body;
+        if (typeof text !== 'string' || !text.trim()) continue;
+        result.push({ ...base, text: text.trim() });
       }
     }
   }

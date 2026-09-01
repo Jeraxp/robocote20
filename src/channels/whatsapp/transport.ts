@@ -42,6 +42,8 @@ export interface WhatsappInboundMessage {
    * Opcional por compatibilidade com quem ainda não propaga.
    */
   channelAccountId?: string;
+  /** Tipo da mensagem quando não é texto (audio/image/document…). Só cloudapi/gateway preenchem. */
+  unsupportedType?: string;
 }
 
 export interface SendTextResult {

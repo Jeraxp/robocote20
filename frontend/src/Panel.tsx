@@ -812,6 +812,7 @@ const actionLabels: Record<string, string> = {
   human_handoff_back: 'agente reassumiu',
   human_intervention: 'humano respondeu',
   human_paused: 'agente pausado',
+  unsupported_media: 'mídia não lida',
 };
 
 /**

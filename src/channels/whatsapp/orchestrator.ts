@@ -30,6 +30,7 @@ import {
 import type { WhatsappInboundMessage } from './transport.js';
 import { sendWhatsappText, wasMessageSentByBot } from './transport.js';
 import { getAgentName } from '../../tenant/agent.js';
+import { buildGreeting } from '../../core/conversation/language.js';
 import { cacheQuoteContext } from '../../quote/contextCache.js';
 import { getTenantActiveRamos, isVehicleRamo, VEHICLE_RAMOS, type VehicleRamo } from '../../tenant/quoteConfig.js';
 import { resolveTenantForWhatsappAccount } from '../../tenant/whatsappAccount.js';
@@ -38,6 +39,17 @@ import { isMensagemRepetida } from './dedup.js';
 
 
 const ROBOCOTE_TENANT_ID = process.env.ROBOCOTE_TENANT_ID?.trim() || 'rpi';
+
+/** Rótulo humano do tipo de mídia da Meta, pra linha do tempo e pra resposta. */
+const MEDIA_LABELS: Record<string, string> = {
+  audio: 'áudio',
+  image: 'imagem',
+  video: 'vídeo',
+  document: 'arquivo',
+  sticker: 'figurinha',
+  location: 'localização',
+  contacts: 'contato',
+};
 
 
 
@@ -100,7 +112,7 @@ async function resolveTenant(
 export async function processWhatsappTurn(
   inbound: WhatsappInboundMessage,
   options: { tenantId?: string } = {},
-): Promise<{ replySent: string | null; action: AssistantAction | 'greet' | 'calc_failed' | 'reset' | 'human_intervention' | 'human_paused' | 'human_handoff_back' | 'human_handoff_requested' | 'service_type' | 'branch_selected'; sessionAfter: SessionState | null }> {
+): Promise<{ replySent: string | null; action: AssistantAction | 'greet' | 'calc_failed' | 'reset' | 'human_intervention' | 'human_paused' | 'human_handoff_back' | 'human_handoff_requested' | 'service_type' | 'branch_selected' | 'unsupported_media'; sessionAfter: SessionState | null }> {
   // ─── Re-entrega: a Meta reenvia o mesmo wamid; o gateway pode re-despachar ────
   // Processar duas vezes faria o lead ouvir a resposta repetida e a jornada andar
   // dois passos com uma frase só. Contrato v2: idempotência é responsabilidade nossa.
@@ -146,6 +158,34 @@ export async function processWhatsappTurn(
     });
     const persisted = await sessionStore.upsert(withInteraction);
     return { replySent: null, action: 'human_intervention', sessionAfter: persisted };
+  }
+
+  // ─── Mídia que o motor não lê (áudio, foto, documento…) ────────────────────
+  // Antes: descartada em silêncio — o lead mandava um áudio e falava com o vazio.
+  // Agora: resposta educada pedindo texto, registrada na linha do tempo, e a
+  // jornada fica exatamente onde estava. Primeiro contato por áudio ganha a
+  // saudação junto, senão ele nem sabe com quem está falando.
+  if (inbound.unsupportedType) {
+    const existing = await sessionStore.get(key);
+    const rotulo = MEDIA_LABELS[inbound.unsupportedType] ?? 'mídia';
+    const pedido = inbound.unsupportedType === 'audio'
+      ? 'Por aqui eu ainda não consigo ouvir áudio 🙉 — pode me escrever em texto? Prometo ler cada palavra.'
+      : `Por aqui eu ainda não consigo abrir ${rotulo} — me conta em texto que eu sigo daqui? 🙂`;
+    let reply = pedido;
+    let base = existing;
+    if (!base) {
+      base = createInitialSessionState(key);
+      const agentName = await getAgentName(tenantId);
+      reply = `${pedido}\n\n${buildGreeting(agentName).join('\n\n')}`;
+    }
+    await sendWhatsappText(inbound.fromPhone, reply);
+    const persisted = await sessionStore.upsert(
+      appendSessionInteraction(
+        appendSessionInteraction(base, { direction: 'inbound', text: `[${rotulo}]`, action: 'unsupported_media' }),
+        { direction: 'outbound', text: reply, action: 'unsupported_media' },
+      ),
+    );
+    return { replySent: reply, action: 'unsupported_media', sessionAfter: persisted };
   }
 
   // Daqui pra frente é CONVERSA, não canal — o motor cuida.

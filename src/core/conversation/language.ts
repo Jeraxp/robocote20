@@ -18,9 +18,18 @@ const SERVICE_TYPE_QUESTION = [
   '2️⃣ Falar com um atendente',
 ].join('\n\n');
 
+/**
+ * Aviso de IA na primeira fala (doutrina do contrato do canal oficial, 30/08):
+ * os grandes players avisam; quem esconde que é robô perde o lead na primeira
+ * frase estranha. Sem nome de fornecedor — a inteligência é do sistema.
+ */
+export const AI_NOTICE =
+  process.env.ROBOCOTE_AI_NOTICE?.trim() ||
+  'Este atendimento usa inteligência artificial e pode cometer erros. Se algo parecer estranho, me avisa que a gente confere.';
+
 export function buildGreeting(agentName: string): string[] {
   return [
-    `Olá! Eu sou o ${agentName}, o seu corretor digital inteligente.`,
+    `Olá! Eu sou o ${agentName}, o seu corretor digital inteligente.\n\n_${AI_NOTICE}_`,
     SERVICE_TYPE_QUESTION,
   ];
 }

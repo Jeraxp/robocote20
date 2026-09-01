@@ -1234,15 +1234,31 @@ api.post('/painel/leads/:id/override', async (c) => {
     : {
         ...session,
         humanOverride: null,
+        // Proposta de antes do humano morre com a devolução — o lead nunca a revalidou.
+        pendingProposal: null,
       };
 
-  // Devolução explícita (decisão Jera 2026-09-01): o robô reassume FALANDO,
-  // não em silêncio — o lead precisa saber com quem está falando. Só WhatsApp:
-  // webchat não recebe push. O timeout de 24h continua valendo como rede.
+  // Devolução explícita (decisões Jera 2026-09-01): o robô reassume FALANDO.
+  // ORDEM IMPORTA (revisão adversarial de 0436a10): o estado muda NO BANCO antes
+  // de qualquer viagem de rede, e a sessão é RELIDA antes do append final —
+  // upsert de snapshot velho engoliria um turno do lead que chegasse durante
+  // os segundos do envio.
   if (!body.active && session.humanOverride?.active && session.channel === 'whatsapp') {
+    const resumedAtIntake = session.stepId === 'service_type' || session.stepId === 'branch_select';
+    const devolvida: SessionState = {
+      ...session,
+      humanOverride: null,
+      pendingProposal: null,
+      // Preso no intake? Volta pro service_type: o recap pergunta "1 cotação /
+      // 2 atendente" — deixar stepId em branch_select faria o "2" do lead virar
+      // escolha de ramo em vez de pedido de humano.
+      stepId: resumedAtIntake ? 'service_type' : session.stepId,
+    };
+    await sessionStore.upsert(devolvida);
+
     const agentName = await getAgentName(session.tenantId);
     let recap: string;
-    if (session.stepId === 'service_type' || session.stepId === 'branch_select') {
+    if (resumedAtIntake) {
       recap = `${agentName} por aqui de novo. ${SERVICE_TYPE_QUESTION}`;
     } else {
       const currentStep = session.stepId === 'complete' ? 'quote_link' : session.stepId;
@@ -1252,23 +1268,25 @@ api.post('/painel/leads/:id/override', async (c) => {
       );
       recap = buildRecapMessage(session, agentName, stepPrompt);
     }
+
     const sent = await sendWhatsappText(session.channelUserId, recap);
+    const chave = { tenantId: session.tenantId, channel: session.channel, channelUserId: session.channelUserId };
+    const fresca = (await sessionStore.get(chave)) ?? devolvida;
     if (sent.ok) {
-      const comRecap = appendSessionInteraction(next, {
+      const updated = await sessionStore.upsert(appendSessionInteraction(fresca, {
         direction: 'outbound',
         text: recap,
         action: 'human_handoff_back',
-      });
-      const updated = await sessionStore.upsert(comRecap);
+      }));
       return c.json({ ok: true, lead: serializeLead(updated), humanOverride: updated.humanOverride });
     }
-    // Envio falhou: devolve mesmo assim (o estado manda), mas conta a verdade.
-    const updated = await sessionStore.upsert(next);
+    // Detalhe técnico só no log interno — na UI, sem nome de fornecedor (white-label).
+    console.warn(`[painel] recap de devolução não entregue: ${sent.error ?? `http_${sent.status}`}`);
     return c.json({
       ok: true,
-      lead: serializeLead(updated),
-      humanOverride: updated.humanOverride,
-      aviso: 'agente reassumiu, mas o recado de retorno não foi entregue ao lead',
+      lead: serializeLead(fresca),
+      humanOverride: fresca.humanOverride,
+      aviso: 'agente reassumiu, mas o recado de retorno não chegou ao lead — se ele estiver esperando, avise-o manualmente',
     });
   }
 
@@ -1281,13 +1299,14 @@ api.post('/painel/leads/:id/override', async (c) => {
  * lead PELO PAINEL, saindo pelo mesmo número oficial da conversa.
  *
  * Regras:
- *  - Primeira mensagem ASSUME a conversa: agente pausa (humanOverride
- *    panel_explicit) e o lead é avisado de que um humano entrou — decisão
- *    explícita do Jera: transparência em vez de troca silenciosa.
- *  - Só WhatsApp por enquanto: o webchat não tem push — o lead só ouviria a
- *    resposta na próxima vez que falasse, o que é pior que não oferecer.
- *  - O envio é verificado: falhou na Meta, o painel fica sabendo (não existe
- *    "enviei" de mentira — lição do e-mail de agosto).
+ *  - Escrever É assumir: a pausa do agente é persistida ANTES de qualquer
+ *    viagem de rede (revisão de 0436a10: sem isso, um turno do lead durante o
+ *    envio seria respondido pelo robô e depois engolido pelo nosso upsert).
+ *  - O lead é avisado da troca (decisão explícita: transparência), com nome de
+ *    gente SÓ quando veio de login de verdade — modo token cairia em rótulo
+ *    interno de fornecedor, e header de nome é injetável (white-label).
+ *  - Só WhatsApp por enquanto: o webchat não tem push.
+ *  - Envio verificado; detalhe técnico de falha vai pro log, nunca pra UI.
  */
 api.post('/painel/leads/:id/mensagem', async (c) => {
   const denied = requirePanelAccess(c);
@@ -1312,59 +1331,72 @@ api.post('/painel/leads/:id/mensagem', async (c) => {
     return c.json({ ok: false, error: 'envio pelo painel disponível apenas para conversas de WhatsApp' }, 400);
   }
 
+  const chave = { tenantId: session.tenantId, channel: session.channel, channelUserId: session.channelUserId };
   const now = Date.now();
   const assumindo = !session.humanOverride?.active;
-  let comAviso = session;
 
-  if (assumindo) {
-    const operador = auth.name?.trim() || 'um atendente da equipe';
-    const firstName = session.customerFirstName?.split(/\s+/)[0]?.trim();
-    const aviso = `${firstName ? `Oi ${firstName}! ` : ''}Aqui é ${operador} — vou continuar seu atendimento a partir daqui. 👋`;
-    const avisoSent = await sendWhatsappText(session.channelUserId, aviso);
-    if (!avisoSent.ok) {
-      return c.json({ ok: false, error: 'não consegui avisar o lead da troca — envio recusado pelo canal' }, 502);
-    }
-    comAviso = appendSessionInteraction(session, {
-      direction: 'outbound',
-      text: aviso,
-      action: 'human_intervention',
-    });
-  }
-
-  const sent = await sendWhatsappText(session.channelUserId, text);
-  if (!sent.ok) {
-    // O aviso pode ter ido e o texto não — persiste o que DE FATO aconteceu.
-    if (assumindo && comAviso !== session) {
-      await sessionStore.upsert({
-        ...comAviso,
-        humanOverride: {
-          active: true,
-          startedAt: now,
-          lastActivityAt: now,
-          source: 'panel_explicit',
-          operatorId: auth.userId ?? undefined,
-        },
-      });
-    }
-    return c.json({ ok: false, error: `mensagem não entregue ao canal (${sent.error ?? `http_${sent.status}`})` }, 502);
-  }
-
-  const comTexto = appendSessionInteraction(comAviso, {
-    direction: 'outbound',
-    text,
-    action: 'human_intervention',
-  });
-  const updated = await sessionStore.upsert({
-    ...comTexto,
+  // Pausa o agente NO BANCO antes de falar com a rede.
+  await sessionStore.upsert({
+    ...session,
     humanOverride: {
       active: true,
       startedAt: session.humanOverride?.active ? session.humanOverride.startedAt : now,
       lastActivityAt: now,
       source: 'panel_explicit',
-      operatorId: session.humanOverride?.operatorId ?? auth.userId ?? undefined,
+      // Quem falou por último assina — operadores podem se revezar na linha.
+      operatorId: auth.userId ?? session.humanOverride?.operatorId ?? undefined,
     },
   });
 
+  let aviso: string | null = null;
+  if (assumindo) {
+    const nomeLogin = auth.authMode === 'session'
+      ? (auth.name ?? '').replace(/[\r\n]+/g, ' ').trim().slice(0, 60)
+      : '';
+    const operador = nomeLogin || 'um atendente da equipe';
+    const firstName = session.customerFirstName?.split(/\s+/)[0]?.trim();
+    aviso = `${firstName ? `Oi ${firstName}! ` : ''}Aqui é ${operador} — vou continuar seu atendimento a partir daqui. 👋`;
+    const avisoSent = await sendWhatsappText(session.channelUserId, aviso);
+    if (!avisoSent.ok) {
+      // Nada foi dito ao lead: desfaz a pausa sobre a sessão FRESCA e conta a verdade.
+      console.warn(`[painel] aviso de atendimento não entregue: ${avisoSent.error ?? `http_${avisoSent.status}`}`);
+      const fresca = await sessionStore.get(chave);
+      if (fresca) {
+        await sessionStore.upsert({ ...fresca, humanOverride: null });
+      }
+      return c.json({ ok: false, error: 'não consegui falar com o lead agora — tente de novo em instantes' }, 502);
+    }
+  }
+
+  const sent = await sendWhatsappText(session.channelUserId, text);
+
+  // Relê SEMPRE: preserva qualquer fala do lead que chegou durante o envio.
+  const fresca = (await sessionStore.get(chave)) ?? session;
+  const override = {
+    active: true as const,
+    startedAt: fresca.humanOverride?.active ? fresca.humanOverride.startedAt : now,
+    lastActivityAt: now,
+    source: 'panel_explicit' as const,
+    operatorId: auth.userId ?? fresca.humanOverride?.operatorId ?? undefined,
+  };
+  let proxima = fresca;
+  if (aviso) {
+    proxima = appendSessionInteraction(proxima, { direction: 'outbound', text: aviso, action: 'human_intervention' });
+  }
+
+  if (!sent.ok) {
+    console.warn(`[painel] mensagem do operador não entregue: ${sent.error ?? `http_${sent.status}`}`);
+    await sessionStore.upsert({ ...proxima, humanOverride: override });
+    return c.json({
+      ok: false,
+      error: aviso
+        ? 'o lead foi avisado da troca, mas sua mensagem não saiu — você está na linha, reenvie'
+        : 'mensagem não entregue — tente novamente',
+    }, 502);
+  }
+
+  proxima = appendSessionInteraction(proxima, { direction: 'outbound', text, action: 'human_intervention' });
+  const updated = await sessionStore.upsert({ ...proxima, humanOverride: override });
   return c.json({ ok: true, lead: serializeLead(updated), humanOverride: updated.humanOverride });
 });
 

@@ -289,6 +289,10 @@ export async function runConversationTurn(
     const cleared: SessionState = {
       ...session,
       humanOverride: null,
+      // Proposta pendente de ANTES do humano assumir morre aqui: o "sim" do lead
+      // depois do recap responde à pergunta do recap, não a uma confirmação
+      // esquecida — que confirmaria dado que ele nunca revalidou.
+      pendingProposal: null,
       stepId: resumedAtIntake ? 'service_type' : session.stepId,
     };
     const persisted = await sessionStore.upsert(

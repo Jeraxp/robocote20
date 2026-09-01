@@ -857,6 +857,12 @@ function ConversasSection({ leads, token, onRefresh }: {
 
   const selected = conversas.find((c) => c.id === selectedId) ?? conversas[0] ?? null;
 
+  // Crava a seleção assim que existe lista: sem isso, o poll de 10s reordenaria
+  // a conversa aberta por baixo do operador — e o rascunho iria pro lead errado.
+  useEffect(() => {
+    if (!selectedId && conversas.length > 0) setSelectedId(conversas[0].id);
+  }, [selectedId, conversas]);
+
   // Conversa nova ao vivo: mantém o feed grudado no fim, como um chat de verdade.
   const lastInteractionId = selected?.interactions.at(-1)?.id ?? null;
   useEffect(() => {
@@ -882,6 +888,9 @@ function ConversasSection({ leads, token, onRefresh }: {
       onRefresh();
     } catch (error) {
       setSendError((error as Error).message);
+      // O servidor pode ter assumido a conversa mesmo com o envio falhando —
+      // atualiza pra UI mostrar o estado real (botão Devolver, placeholder certo).
+      onRefresh();
     } finally {
       setSending(false);
     }
@@ -897,7 +906,9 @@ function ConversasSection({ leads, token, onRefresh }: {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ active: false }),
       });
-      await parsePanelResponse(response, 'não consegui devolver a conversa');
+      const resultado = await parsePanelResponse<{ ok: true; aviso?: string }>(response, 'não consegui devolver a conversa');
+      // "Devolvi" com recado perdido não é sucesso limpo — o operador precisa saber.
+      if (resultado.aviso) setSendError(resultado.aviso);
       onRefresh();
     } catch (error) {
       setSendError((error as Error).message);

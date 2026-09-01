@@ -21,6 +21,43 @@ const RAMO_LABELS: Record<VehicleRamo, string> = {
   caminhao: 'Seguro de Caminhão',
 };
 
+/** Lê o ramo cravado na sessão (answer insurance_branch); sem escolha = auto. */
+export function ramoFromAnswers(answers: Record<string, { rawValue?: string; value?: string }> = {}): VehicleRamo {
+  const raw = answers.insurance_branch?.rawValue;
+  return raw === 'moto' || raw === 'caminhao' ? raw : 'auto';
+}
+
+/**
+ * Ajusta o texto de uma pergunta pro ramo escolhido.
+ *
+ * A tabela STEP_PROMPT é escrita em auto ("o carro") e fica INTOCADA — os testes
+ * de caracterização congelam esses textos. Moto e caminhão entram por troca de
+ * locução completa, com artigo junto: "o carro"→"a moto", nunca um replace cego
+ * de palavra que produziria "o moto". Quem fala de caminhão dizendo "carro"
+ * queima a confiança na primeira frase — wording é produto.
+ */
+const RAMO_WORDING: Record<Exclude<VehicleRamo, 'auto'>, Array<[string, string]>> = {
+  moto: [
+    ['esse carro', 'essa moto'],
+    ['o carro', 'a moto'],
+    ['do carro', 'da moto'],
+  ],
+  caminhao: [
+    ['esse carro', 'esse caminhão'],
+    ['o carro', 'o caminhão'],
+    ['do carro', 'do caminhão'],
+  ],
+};
+
+export function applyRamoWording(text: string, ramo: VehicleRamo): string {
+  if (ramo === 'auto') return text;
+  let out = text;
+  for (const [de, para] of RAMO_WORDING[ramo]) {
+    out = out.split(de).join(para);
+  }
+  return out;
+}
+
 export const STEP_ORDER = [
   'name',
   'vehicle_plate',

@@ -822,9 +822,16 @@ const actionLabels: Record<string, string> = {
  * O botão de assumir a conversa é a Etapa B, desenhada em separado porque
  * mexe em conversa com cliente real.
  */
-function ConversasSection({ leads }: { leads: PanelLead[] }): JSX.Element {
+function ConversasSection({ leads, token, onRefresh }: {
+  leads: PanelLead[];
+  token: string;
+  onRefresh: () => void;
+}): JSX.Element {
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const feedRef = useRef<HTMLDivElement | null>(null);
 
   const conversas = useMemo(() => {
@@ -856,6 +863,48 @@ function ConversasSection({ leads }: { leads: PanelLead[] }): JSX.Element {
     const feed = feedRef.current;
     if (feed) feed.scrollTop = feed.scrollHeight;
   }, [selected?.id, lastInteractionId]);
+
+  // Etapa B (decisões Jera 2026-09-01): escrever É assumir — o backend pausa o
+  // agente e avisa o lead na primeira mensagem. Por isso não existe botão
+  // "Assumir" separado: o gesto que assume é o de falar.
+  async function enviarMensagem(): Promise<void> {
+    if (!selected || !draft.trim() || sending) return;
+    setSending(true);
+    setSendError(null);
+    try {
+      const response = await panelFetch(`/api/painel/leads/${selected.id}/mensagem`, token, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: draft.trim() }),
+      });
+      await parsePanelResponse(response, 'não consegui enviar a mensagem');
+      setDraft('');
+      onRefresh();
+    } catch (error) {
+      setSendError((error as Error).message);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function devolverProAgente(): Promise<void> {
+    if (!selected || sending) return;
+    setSending(true);
+    setSendError(null);
+    try {
+      const response = await panelFetch(`/api/painel/leads/${selected.id}/override`, token, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ active: false }),
+      });
+      await parsePanelResponse(response, 'não consegui devolver a conversa');
+      onRefresh();
+    } catch (error) {
+      setSendError((error as Error).message);
+    } finally {
+      setSending(false);
+    }
+  }
 
   return (
     <section className="panel-section-page conversas-page">
@@ -924,6 +973,16 @@ function ConversasSection({ leads }: { leads: PanelLead[] }): JSX.Element {
                   </p>
                 </div>
                 <div className="conversas-thread-meta">
+                  {selected.humanOverride?.active ? (
+                    <button
+                      type="button"
+                      className="conversa-devolver"
+                      disabled={sending}
+                      onClick={() => void devolverProAgente()}
+                    >
+                      Devolver pro agente
+                    </button>
+                  ) : null}
                   <StatusPill status={selected.status} />
                   {selected.quoteRoomPath ? (
                     <a className="conversa-quote-link" href={selected.quoteRoomPath} target="_blank" rel="noreferrer">
@@ -948,6 +1007,38 @@ function ConversasSection({ leads }: { leads: PanelLead[] }): JSX.Element {
                     </article>
                   ))}
               </div>
+              {selected.channel === 'whatsapp' ? (
+                <footer className="conversas-composer">
+                  {sendError ? <p className="conversas-composer-erro">{sendError}</p> : null}
+                  <div className="conversas-composer-row">
+                    <textarea
+                      value={draft}
+                      rows={2}
+                      placeholder={selected.humanOverride?.active
+                        ? 'Escreva sua resposta — você está na linha.'
+                        : 'Escrever assume a conversa: o agente pausa e o lead é avisado.'}
+                      onChange={(event) => setDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' && !event.shiftKey) {
+                          event.preventDefault();
+                          void enviarMensagem();
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={sending || !draft.trim()}
+                      onClick={() => void enviarMensagem()}
+                    >
+                      {sending ? 'Enviando…' : 'Enviar'}
+                    </button>
+                  </div>
+                </footer>
+              ) : (
+                <footer className="conversas-composer is-webchat">
+                  <p>Responder pelo painel chega primeiro no WhatsApp — no webchat, acompanhe por aqui.</p>
+                </footer>
+              )}
             </>
           ) : (
             <div className="conversation-empty conversas-vazia">
@@ -2618,7 +2709,7 @@ export function Panel(): JSX.Element {
             </section>
           </>
         ) : activeSection === 'conversas' ? (
-          <ConversasSection leads={leads} />
+          <ConversasSection leads={leads} token={panelToken} onRefresh={() => void refresh(panelToken)} />
         ) : activeSection === 'tenants' ? (
           <TenantsSection
             tenants={tenants}

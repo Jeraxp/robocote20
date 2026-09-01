@@ -48,6 +48,8 @@ import {
 import {
   RAMO_LABELS,
   STEP_PROMPT,
+  applyRamoWording,
+  ramoFromAnswers,
   nextStepAfter,
   applyProposalAndAdvance,
   setBranchAndStartJourney,
@@ -279,7 +281,7 @@ export async function runConversationTurn(
       recap = `${agentName} por aqui de novo. ${SERVICE_TYPE_QUESTION}`;
     } else {
       const currentStep = session.stepId === 'complete' ? 'quote_link' : session.stepId;
-      const stepPrompt = STEP_PROMPT[currentStep as StepId] ?? 'Pode continuar de onde paramos?';
+      const stepPrompt = applyRamoWording(STEP_PROMPT[currentStep as StepId] ?? 'Pode continuar de onde paramos?', ramoFromAnswers(session.answers));
       recap = buildRecapMessage(session, agentName, stepPrompt);
     }
     await deps.send(recap);
@@ -408,7 +410,7 @@ export async function runConversationTurn(
       const next = advanced.stepId;
       const ack = `Anotei: ${pending.displayLabel ?? pending.value}.`;
       const followUp = next !== 'complete' && STEP_PROMPT[next as StepId]
-        ? `\n\n${STEP_PROMPT[next as StepId]}`
+        ? `\n\n${applyRamoWording(STEP_PROMPT[next as StepId], ramoFromAnswers(advanced.answers))}`
         : '';
       const reply = `${ack}${followUp}`;
       await deps.send(reply);
@@ -418,7 +420,7 @@ export async function runConversationTurn(
 
     if (looksLikeDenial(inbound.text)) {
       const currentStep = session.stepId === 'complete' ? 'quote_link' : session.stepId;
-      const prompt = STEP_PROMPT[currentStep as StepId] ?? 'Me passa o dado de novo, por favor.';
+      const prompt = applyRamoWording(STEP_PROMPT[currentStep as StepId] ?? 'Me passa o dado de novo, por favor.', ramoFromAnswers(session.answers));
       const reply = `Beleza, vou refazer. ${prompt}`;
       await deps.send(reply);
       const cleared = await sessionStore.upsert(recordTurn({ ...session, pendingProposal: null }, inbound, reply, 'ask_clarification'));
@@ -673,7 +675,7 @@ export async function runConversationTurn(
           : `CPF do condutor anotado ✅`;
       }
       const followUp = nextStep !== 'complete' && STEP_PROMPT[nextStep as StepId]
-        ? `\n\n${STEP_PROMPT[nextStep as StepId]}`
+        ? `\n\n${applyRamoWording(STEP_PROMPT[nextStep as StepId], ramoFromAnswers(next.answers))}`
         : '';
       const reply = `${ack}${followUp}`;
       await deps.send(reply);
@@ -784,7 +786,7 @@ export async function runConversationTurn(
       // mostrando o que vem em seguida — quem conduz é a fala dela.
       const nextStep = nextSession.stepId;
       if (nextStep !== 'complete' && STEP_PROMPT[nextStep as StepId]) {
-        replyToSend = `${result.reply}\n\n${STEP_PROMPT[nextStep as StepId]}`;
+        replyToSend = `${result.reply}\n\n${applyRamoWording(STEP_PROMPT[nextStep as StepId], ramoFromAnswers(nextSession.answers))}`;
       }
     }
   }

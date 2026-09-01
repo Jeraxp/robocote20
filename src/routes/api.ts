@@ -47,6 +47,9 @@ import {
   createEvolutionInstance,
   getEvolutionConnectionState,
 } from '../channels/whatsapp/evolution.js';
+import { sendWhatsappText } from '../channels/whatsapp/transport.js';
+import { buildRecapMessage, SERVICE_TYPE_QUESTION } from '../core/conversation/language.js';
+import { STEP_PROMPT, applyRamoWording, ramoFromAnswers, type StepId } from '../core/conversation/steps.js';
 
 export const api = new Hono();
 
@@ -1233,7 +1236,135 @@ api.post('/painel/leads/:id/override', async (c) => {
         humanOverride: null,
       };
 
+  // Devolução explícita (decisão Jera 2026-09-01): o robô reassume FALANDO,
+  // não em silêncio — o lead precisa saber com quem está falando. Só WhatsApp:
+  // webchat não recebe push. O timeout de 24h continua valendo como rede.
+  if (!body.active && session.humanOverride?.active && session.channel === 'whatsapp') {
+    const agentName = await getAgentName(session.tenantId);
+    let recap: string;
+    if (session.stepId === 'service_type' || session.stepId === 'branch_select') {
+      recap = `${agentName} por aqui de novo. ${SERVICE_TYPE_QUESTION}`;
+    } else {
+      const currentStep = session.stepId === 'complete' ? 'quote_link' : session.stepId;
+      const stepPrompt = applyRamoWording(
+        STEP_PROMPT[currentStep as StepId] ?? 'Pode continuar de onde paramos?',
+        ramoFromAnswers(session.answers),
+      );
+      recap = buildRecapMessage(session, agentName, stepPrompt);
+    }
+    const sent = await sendWhatsappText(session.channelUserId, recap);
+    if (sent.ok) {
+      const comRecap = appendSessionInteraction(next, {
+        direction: 'outbound',
+        text: recap,
+        action: 'human_handoff_back',
+      });
+      const updated = await sessionStore.upsert(comRecap);
+      return c.json({ ok: true, lead: serializeLead(updated), humanOverride: updated.humanOverride });
+    }
+    // Envio falhou: devolve mesmo assim (o estado manda), mas conta a verdade.
+    const updated = await sessionStore.upsert(next);
+    return c.json({
+      ok: true,
+      lead: serializeLead(updated),
+      humanOverride: updated.humanOverride,
+      aviso: 'agente reassumiu, mas o recado de retorno não foi entregue ao lead',
+    });
+  }
+
   const updated = await sessionStore.upsert(next);
+  return c.json({ ok: true, lead: serializeLead(updated), humanOverride: updated.humanOverride });
+});
+
+/**
+ * Etapa B do Atendimento (decisões Jera 2026-09-01): o operador responde o
+ * lead PELO PAINEL, saindo pelo mesmo número oficial da conversa.
+ *
+ * Regras:
+ *  - Primeira mensagem ASSUME a conversa: agente pausa (humanOverride
+ *    panel_explicit) e o lead é avisado de que um humano entrou — decisão
+ *    explícita do Jera: transparência em vez de troca silenciosa.
+ *  - Só WhatsApp por enquanto: o webchat não tem push — o lead só ouviria a
+ *    resposta na próxima vez que falasse, o que é pior que não oferecer.
+ *  - O envio é verificado: falhou na Meta, o painel fica sabendo (não existe
+ *    "enviei" de mentira — lição do e-mail de agosto).
+ */
+api.post('/painel/leads/:id/mensagem', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const id = c.req.param('id');
+  const body = await c.req.json().catch(() => null) as { text?: string } | null;
+  const text = body?.text?.trim();
+  if (!text) {
+    return c.json({ ok: false, error: 'text é obrigatório' }, 400);
+  }
+  if (text.length > 4000) {
+    return c.json({ ok: false, error: 'mensagem longa demais (máx. 4000 caracteres)' }, 400);
+  }
+
+  const auth = resolveAuthContext(c);
+  const session = await sessionStore.findBy(tenantScope(auth), (item) => stableLeadId(item) === id);
+  if (!session) {
+    return c.json({ ok: false, error: 'lead não encontrado' }, 404);
+  }
+  if (session.channel !== 'whatsapp') {
+    return c.json({ ok: false, error: 'envio pelo painel disponível apenas para conversas de WhatsApp' }, 400);
+  }
+
+  const now = Date.now();
+  const assumindo = !session.humanOverride?.active;
+  let comAviso = session;
+
+  if (assumindo) {
+    const operador = auth.name?.trim() || 'um atendente da equipe';
+    const firstName = session.customerFirstName?.split(/\s+/)[0]?.trim();
+    const aviso = `${firstName ? `Oi ${firstName}! ` : ''}Aqui é ${operador} — vou continuar seu atendimento a partir daqui. 👋`;
+    const avisoSent = await sendWhatsappText(session.channelUserId, aviso);
+    if (!avisoSent.ok) {
+      return c.json({ ok: false, error: 'não consegui avisar o lead da troca — envio recusado pelo canal' }, 502);
+    }
+    comAviso = appendSessionInteraction(session, {
+      direction: 'outbound',
+      text: aviso,
+      action: 'human_intervention',
+    });
+  }
+
+  const sent = await sendWhatsappText(session.channelUserId, text);
+  if (!sent.ok) {
+    // O aviso pode ter ido e o texto não — persiste o que DE FATO aconteceu.
+    if (assumindo && comAviso !== session) {
+      await sessionStore.upsert({
+        ...comAviso,
+        humanOverride: {
+          active: true,
+          startedAt: now,
+          lastActivityAt: now,
+          source: 'panel_explicit',
+          operatorId: auth.userId ?? undefined,
+        },
+      });
+    }
+    return c.json({ ok: false, error: `mensagem não entregue ao canal (${sent.error ?? `http_${sent.status}`})` }, 502);
+  }
+
+  const comTexto = appendSessionInteraction(comAviso, {
+    direction: 'outbound',
+    text,
+    action: 'human_intervention',
+  });
+  const updated = await sessionStore.upsert({
+    ...comTexto,
+    humanOverride: {
+      active: true,
+      startedAt: session.humanOverride?.active ? session.humanOverride.startedAt : now,
+      lastActivityAt: now,
+      source: 'panel_explicit',
+      operatorId: session.humanOverride?.operatorId ?? auth.userId ?? undefined,
+    },
+  });
+
   return c.json({ ok: true, lead: serializeLead(updated), humanOverride: updated.humanOverride });
 });
 

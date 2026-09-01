@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { applyRamoWording, ramoFromAnswers } from '../core/conversation/steps.js';
 import { getRobocotePersona } from './persona.js';
 import { getRagConfig, searchKnowledge } from './rag.js';
 import { loadCatalogForStep, stepNeedsCatalog } from '../catalog/auto.js';
@@ -691,8 +692,19 @@ function routerSystemPrompt(agentName: string): string {
   ].join('\n');
 }
 
+/**
+ * Contexto do step com o wording do ramo cravado na sessão. Sem isto a IA
+ * fala "dirige o carro" pra quem cota moto — e o lead corrige a IA em vez de
+ * responder, quebrando o fluxo.
+ */
+function stepContextFor(request: AssistantRequest): { title: string; prompt: string } {
+  const base = STEP_CONTEXT[request.snapshot.stepId];
+  const ramo = ramoFromAnswers(request.snapshot.answers);
+  return { title: base.title, prompt: applyRamoWording(base.prompt, ramo) };
+}
+
 function routerUserPrompt(request: AssistantRequest): string {
-  const currentStep = STEP_CONTEXT[request.snapshot.stepId];
+  const currentStep = stepContextFor(request);
   return JSON.stringify({
     channel: request.channel,
     currentStep: request.snapshot.stepId,
@@ -836,7 +848,7 @@ function replyUserPrompt(
   usedHint = false,
   knowledgeContext = '',
 ): string {
-  const currentStep = STEP_CONTEXT[request.snapshot.stepId];
+  const currentStep = stepContextFor(request);
   return JSON.stringify({
     channel: request.channel,
     currentStep: request.snapshot.stepId,

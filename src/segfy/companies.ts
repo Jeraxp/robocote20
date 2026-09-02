@@ -1,7 +1,8 @@
 import { segfyPOST } from './client.js';
+import { segfyRamoPath } from './calcular.js';
 
 /**
- * Universo de seguradoras por vehicle_type, direto da Segfy (`company-list`).
+ * Universo de seguradoras por ramo, direto da Segfy (`company-list`).
  *
  * Modelo universal (Jera 2026-06-01): em vez de cada corretora curar uma lista,
  * mandamos TODAS as seguradoras ativas do ramo no `/calculate`. A Segfy filtra
@@ -10,8 +11,8 @@ import { segfyPOST } from './client.js';
  * A própria company-list já vem com a comissão que a corretora (token atual) tem
  * com cada seguradora, então usamos isso como default por seguradora.
  *
- * Cache em memória por vehicle_type (TTL 1h) — a lista é quase estática e isso
- * evita um POST extra a cada cotação. Usa o mesmo bearer cacheado do auth.
+ * Cache em memória por chave (vehicle_type ou ramo, TTL 1h) — a lista é quase
+ * estática e isso evita um POST extra a cada cotação. Usa o mesmo bearer cacheado do auth.
  */
 
 interface CompanyListItem {
@@ -41,18 +42,18 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 const TTL_MS = 60 * 60 * 1000; // 1h
 
-/**
- * Lista as seguradoras ATIVAS que a corretora pode cotar pro vehicle_type
- * (car | truck | motorcycle). Exclui `inativo`. Cacheado por 1h.
- */
-export async function getInsurersForVehicleType(vehicleType: string): Promise<InsurerOption[]> {
-  const cached = cache.get(vehicleType);
+async function fetchInsurers(
+  cacheKey: string,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<InsurerOption[]> {
+  const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.at < TTL_MS) return cached.insurers;
 
   const res = await segfyPOST<{ data?: CompanyListItem[] }>(
-    '/api/vehicle/version/1.0/company-list',
-    { data: { vehicle_type: vehicleType } },
-    `company_list_${vehicleType}`,
+    path,
+    body,
+    `company_list_${cacheKey}`,
     'body_config_token',
   );
   const list = Array.isArray(res.body?.data) ? res.body.data : [];
@@ -65,6 +66,23 @@ export async function getInsurersForVehicleType(vehicleType: string): Promise<In
       unstable: Boolean(c.instabilidade),
     }));
 
-  if (insurers.length > 0) cache.set(vehicleType, { at: Date.now(), insurers });
+  if (insurers.length > 0) cache.set(cacheKey, { at: Date.now(), insurers });
   return insurers;
+}
+
+/**
+ * Lista as seguradoras ATIVAS que a corretora pode cotar pro vehicle_type
+ * (car | truck | motorcycle). Exclui `inativo`. Cacheado por 1h.
+ */
+export async function getInsurersForVehicleType(vehicleType: string): Promise<InsurerOption[]> {
+  return fetchInsurers(vehicleType, segfyRamoPath('vehicle', 'company-list'), { data: { vehicle_type: vehicleType } });
+}
+
+/**
+ * Seguradoras ATIVAS do ramo residencial. A company-list de residence não recebe
+ * `data` nenhum — só o token da corretora, que o client injeta em `config`.
+ * Shape da resposta presumido igual ao do vehicle; confirmar no 1º dump real.
+ */
+export async function getInsurersForResidence(): Promise<InsurerOption[]> {
+  return fetchInsurers('residence', segfyRamoPath('residence', 'company-list'), {});
 }

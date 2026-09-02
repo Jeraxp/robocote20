@@ -48,6 +48,8 @@ import {
   getEvolutionConnectionState,
 } from '../channels/whatsapp/evolution.js';
 import { sendWhatsappText } from '../channels/whatsapp/transport.js';
+import { clearWhatsappAccountCache } from '../tenant/whatsappAccount.js';
+import { WhatsappNumberTakenError } from '../admin/store.js';
 import { buildRecapMessage, SERVICE_TYPE_QUESTION } from '../core/conversation/language.js';
 import { STEP_PROMPT, applyRamoWording, ramoFromAnswers, type StepId } from '../core/conversation/steps.js';
 
@@ -881,9 +883,40 @@ api.post('/admin/whatsapp-instances', async (c) => {
     instanceName?: string;
     ownerPhone?: string;
     createInEvolution?: boolean;
+    cloudPhoneNumberId?: string;
+    displayPhone?: string;
   } | null;
 
   const tenantId = writableTenantId(auth, body?.tenantId);
+
+  // ─── Canal OFICIAL (decisão Jera 01/09): número cadastrado pela tela, não por SQL ──
+  // A chave é o phone_number_id (estável); o telefone é só exibição. O mesmo id
+  // nunca pode atender duas corretoras — índice único no banco, 409 aqui.
+  if (body?.cloudPhoneNumberId !== undefined) {
+    const cloudId = String(body.cloudPhoneNumberId).replace(/\D/g, '');
+    if (!cloudId) {
+      return c.json({ ok: false, error: 'ID do número é obrigatório (só dígitos)' }, 400);
+    }
+    const displayPhone = normalizeManualPhone(body.displayPhone);
+    try {
+      const record = await adminStore.createWhatsappInstance({
+        tenantId,
+        evolutionInstanceName: `cloudapi-${tenantId}-${cloudId}`,
+        ownerPhone: displayPhone || undefined,
+        cloudPhoneNumberId: cloudId,
+        status: 'connected',
+      });
+      // O resolvedor de corretora guarda 60s de cache — o número novo vale na hora.
+      clearWhatsappAccountCache();
+      return c.json({ ok: true, instance: record }, 201);
+    } catch (e) {
+      if (e instanceof WhatsappNumberTakenError) {
+        return c.json({ ok: false, error: e.message }, 409);
+      }
+      throw e;
+    }
+  }
+
   const instanceName = cleanText(body?.instanceName, 80) || `robocote-${tenantId}-${Date.now()}`;
   const ownerPhone = normalizeManualPhone(body?.ownerPhone);
 
@@ -967,7 +1000,8 @@ api.get('/cotacoes/:guid/resumo', async (c) => {
   try {
     const ctx = readQuoteContext(guid);
     const agentName = await getAgentName(ctx?.tenantId ?? '');
-    const summary = await getQuoteSummary(guid, ctx?.info, agentName);
+    // Sem contexto (cache expirou/reiniciou) cai em 'auto' — o ramo persistido é dívida da F4 (quote_meta).
+    const summary = await getQuoteSummary(guid, ctx?.info, agentName, ctx?.ramo);
     return c.json(summary);
   } catch (e) {
     return c.json(

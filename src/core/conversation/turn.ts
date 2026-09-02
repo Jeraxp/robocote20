@@ -12,9 +12,11 @@
 
 import { handleAutoF1AssistantMessage, type AssistantAction } from '../../assistant/autoF1.js';
 import { runAutoF1Quote, type AutoF1QuoteRequest } from '../../journey/autoF1.js';
+import { runResidencialQuote } from '../../journey/residencialF1.js';
 import { loadCatalogForStep } from '../../catalog/auto.js';
 import { decodePlate, pickPlateDecodeOutcome, isValidPlateFormat, normalizePlate } from '../../segfy/placa.js';
 import { buscarCondutor } from '../../segfy/condutor.js';
+import { lookupCep, type EnderecoCep } from '../../segfy/cep.js';
 import {
   sessionStore,
   createInitialSessionState,
@@ -26,7 +28,7 @@ import {
 import { getAgentName } from '../../tenant/agent.js';
 import { cacheQuoteContext } from '../../quote/contextCache.js';
 import { QUOTE_DISCLAIMER } from '../../quote/disclaimer.js';
-import { getTenantActiveRamos, isVehicleRamo, VEHICLE_RAMOS, type VehicleRamo } from '../../tenant/quoteConfig.js';
+import { getTenantActiveRamos, isVehicleRamo, VEHICLE_RAMOS } from '../../tenant/quoteConfig.js';
 import {
   SERVICE_TYPE_QUESTION,
   buildGreeting,
@@ -42,6 +44,7 @@ import {
   buildRecapMessage,
   looksLikeNoPlateSkip,
   extractPlateFromMessage,
+  extractZipFromMessage,
   extractValidCpf,
   maskCpf,
 } from './language.js';
@@ -54,6 +57,7 @@ import {
   applyProposalAndAdvance,
   setBranchAndStartJourney,
   type StepId,
+  type JourneyRamo,
 } from './steps.js';
 
 /** Mensagem que chega, já sem nada de canal: quem falou, o que disse, de quem é. */
@@ -94,17 +98,62 @@ const PROGRESS_NUDGE_MS = 15_000;
 
 const ROBOCOTE_QUOTE_BASE_URL = process.env.ROBOCOTE_QUOTE_BASE_URL?.trim() ?? '';
 
-/** Ramos vehicle que a corretora oferece (ramos ativos ∩ suportados). Fallback ['auto']. */
-async function resolveOfferableRamos(tenantId: string): Promise<VehicleRamo[]> {
+/** Ramos com jornada que a corretora oferece (ramos ativos ∩ suportados). Fallback ['auto']. */
+async function resolveOfferableRamos(tenantId: string): Promise<JourneyRamo[]> {
   try {
     const active = await getTenantActiveRamos(tenantId);
-    const offerable = active.filter((r): r is VehicleRamo => isVehicleRamo(r));
-    // Mantém ordem canônica (auto, moto, caminhao) pro menu ficar estável.
-    const ordered = VEHICLE_RAMOS.filter((r) => offerable.includes(r));
+    const offerable = active.filter((r): r is JourneyRamo => isVehicleRamo(r) || r === 'residencial');
+    // Mantém ordem canônica (auto, moto, caminhao, residencial) pro menu ficar estável.
+    const canonical: JourneyRamo[] = [...VEHICLE_RAMOS, 'residencial'];
+    const ordered = canonical.filter((r) => offerable.includes(r));
     return ordered.length > 0 ? ordered : ['auto'];
   } catch {
     return ['auto'];
   }
+}
+
+/** Rótulo PT-BR do tipo de logradouro (enum do motor `residence`) pra confirmar o endereço ao lead. */
+const STREET_TYPE_LABEL: Record<string, string> = {
+  street: 'Rua',
+  avenue: 'Avenida',
+  lane: 'Alameda',
+  highway: 'Rodovia',
+  road: 'Estrada',
+  square: 'Praça',
+  platter: 'Travessa',
+  plain: 'Largo',
+  village: 'Vila',
+  condominium: 'Condomínio',
+};
+
+function streetDisplay(cep: EnderecoCep): string {
+  const label = cep.streetType ? STREET_TYPE_LABEL[cep.streetType] : undefined;
+  if (!label || cep.street.toLowerCase().startsWith(label.toLowerCase())) return cep.street;
+  return `${label} ${cep.street}`;
+}
+
+type AnswerMap = Record<string, { id: string; label: string; value: string; rawValue?: string; metadata?: Record<string, unknown> }>;
+
+/**
+ * Endereço que veio do lookup entra como answer com procedência marcada
+ * (label + metadata.source) — no painel e no payload fica claro que o lead
+ * não afirmou isso, a base respondeu pelo CEP.
+ */
+function addressAnswersFromLookup(cep: EnderecoCep): AnswerMap {
+  const fromLookup = (id: string, value: string): AnswerMap[string] => ({
+    id,
+    label: 'Endereço (pelo CEP)',
+    value,
+    rawValue: value,
+    metadata: { source: 'lookup' },
+  });
+  const out: AnswerMap = {};
+  if (cep.street) out.res_street = fromLookup('res_street', cep.street);
+  if (cep.neighborhood) out.res_neighborhood = fromLookup('res_neighborhood', cep.neighborhood);
+  if (cep.city) out.res_city = fromLookup('res_city', cep.city);
+  if (cep.state) out.res_state = fromLookup('res_state', cep.state.toUpperCase());
+  if (cep.streetType) out.res_street_type = fromLookup('res_street_type', cep.streetType);
+  return out;
 }
 
 function buildQuoteLink(guid: string): string {
@@ -203,14 +252,26 @@ function answersFromSession(session: SessionState): AutoF1QuoteRequest['answers'
   };
 }
 
+/** rawValue de cada answer por stepId — é o que o motor `residence` consome. */
+function rawAnswersFromSession(session: SessionState): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, answer] of Object.entries(session.answers)) {
+    out[key] = answer.rawValue ?? answer.value ?? '';
+  }
+  return out;
+}
+
 async function triggerCalculate(
   inbound: CoreInbound,
   session: SessionState,
 ): Promise<{ guid: string; link: string; topReply: string } | null> {
   try {
-    const request: AutoF1QuoteRequest = { answers: answersFromSession(session) };
-    const result = await runAutoF1Quote(request, 45000, session.tenantId);
-    // Registra contexto da cotação (tenantId + customer) pro Quote Room resolver agent_name dinâmico.
+    const ramo = ramoFromAnswers(session.answers);
+    const result = ramo === 'residencial'
+      ? await runResidencialQuote({ answers: rawAnswersFromSession(session) }, 45000, session.tenantId)
+      : await runAutoF1Quote({ answers: answersFromSession(session) } satisfies AutoF1QuoteRequest, 45000, session.tenantId);
+    // Registra contexto da cotação (tenantId + customer + ramo) pro Quote Room resolver
+    // agent_name dinâmico e rotear o show-results pelo motor certo.
     cacheQuoteContext(
       result.guid,
       {
@@ -218,6 +279,7 @@ async function triggerCalculate(
         coveragePreference: session.coveragePreference,
       },
       session.tenantId,
+      ramo,
     );
     const link = buildQuoteLink(result.guid);
     const top = result.quoteSummary.options
@@ -785,12 +847,29 @@ export async function runConversationTurn(
     } else {
       // Avança normal: aplica answer no estado e move pro próximo step.
       nextSession = applyProposalAndAdvance(nextSession, proposal);
+      let ack = result.reply;
+
+      // ─── CEP do imóvel: a base responde o endereço pelo lead ───────────────
+      // Achou → grava rua/bairro/cidade/UF com procedência de lookup e pula os 4
+      // steps de endereço (shouldSkipStep os enxerga preenchidos). Não achou →
+      // segue perguntando, sem drama. Nunca lança: lookup falho = null.
+      if (proposal.stepId === 'res_zip') {
+        const cep = await lookupCep(proposal.value);
+        if (cep) {
+          const answers = { ...nextSession.answers, ...addressAnswersFromLookup(cep) };
+          nextSession = { ...nextSession, answers, stepId: nextStepAfter('res_zip', answers) };
+          const cidadeUf = [cep.city, cep.state.toUpperCase()].filter(Boolean).join('/');
+          ack = `Achei o endereço: ${streetDisplay(cep)}${cep.neighborhood ? `, ${cep.neighborhood}` : ''}${cidadeUf ? ` — ${cidadeUf}` : ''}.`;
+        }
+      }
+
       // P8 — Concatena a pergunta do próximo step pra Robocotenão deixar
       // o lead no escuro depois do "Anotei". No WhatsApp não tem rail visual
       // mostrando o que vem em seguida — quem conduz é a fala dela.
       const nextStep = nextSession.stepId;
+      replyToSend = ack;
       if (nextStep !== 'complete' && STEP_PROMPT[nextStep as StepId]) {
-        replyToSend = `${result.reply}\n\n${applyRamoWording(STEP_PROMPT[nextStep as StepId], ramoFromAnswers(nextSession.answers))}`;
+        replyToSend = `${ack}\n\n${applyRamoWording(STEP_PROMPT[nextStep as StepId], ramoFromAnswers(nextSession.answers))}`;
       }
     }
   }

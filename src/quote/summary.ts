@@ -1,7 +1,14 @@
 import { getResultado, type ResultadoResponse } from '../segfy/resultado.js';
 import type { SegfyResponse } from '../segfy/client.js';
+import { dumpJSON } from '../utils/logger.js';
 
 type JsonRecord = Record<string, unknown>;
+
+/**
+ * Ramo da cotação que o Quote Room apresenta. Espelha JourneyRamo da conversa,
+ * mas fica local: a apresentação não pode depender do motor da conversa.
+ */
+export type QuoteRamo = 'auto' | 'moto' | 'caminhao' | 'residencial';
 
 export interface QuoteCoverageSummary {
   coverageType: string;
@@ -59,9 +66,14 @@ export interface QuoteSummary {
   quotationId: string;
   /** Nome do agente exibido no Quote Room (semi-white-label por tenant). */
   agentName: string;
+  ramo: QuoteRamo;
   quoteDate: string | null;
   validUntil: string | null;
   customer: QuoteCustomerInfo;
+  /**
+   * Bem segurado. Em residencial o bloco é reaproveitado como rótulo do imóvel
+   * (label 'Imóvel', brand = tipo, model = endereço curto) — o front antigo não quebra.
+   */
   vehicle: {
     label: string;
     brand: string;
@@ -191,6 +203,19 @@ function productNameFor(companyKey: string, product: string): string {
   return product;
 }
 
+/**
+ * Residencial: o shape de company_coverages ainda não foi congelado (sem dump real),
+ * então só assistência e vidros pontuam sobre uma base neutra. Empate = decide o preço.
+ */
+function coverageScoreResidencial(coverage: QuoteCoverageSummary): number {
+  let score = 50;
+  const assistance = coverage.assistance.toLowerCase();
+  if (assistance && !isCoverageEmpty(assistance)) score += 25;
+  const glass = coverage.glass.toLowerCase();
+  if (glass && !isCoverageEmpty(glass)) score += 15;
+  return Math.round(Math.min(score, 100));
+}
+
 function coverageScore(coverage: QuoteCoverageSummary, franchise: number | null): number {
   let score = 0;
   if (coverage.isComprehensive) score += 24;
@@ -234,7 +259,33 @@ function buildCoverage(raw: JsonRecord): QuoteCoverageSummary {
   };
 }
 
-function buildBadges(option: Omit<QuoteOptionSummary, 'rank' | 'badges' | 'consultativeNote' | 'attentionPoints'>): string[] {
+type BaseOption = Omit<QuoteOptionSummary, 'rank' | 'badges' | 'consultativeNote' | 'attentionPoints'>;
+
+function buildBadgesResidencial(option: BaseOption): string[] {
+  const badges = new Set<string>();
+  if (option.category === 'principal') badges.add('Produto principal');
+  if (!isCoverageEmpty(option.coverage.assistance)) badges.add('Com assistência');
+  if (!isCoverageEmpty(option.coverage.glass)) badges.add('Vidros inclusos');
+  return Array.from(badges).slice(0, 4);
+}
+
+function buildAttentionPointsResidencial(option: BaseOption): string[] {
+  const points: string[] = [];
+  if (isCoverageEmpty(option.coverage.assistance)) {
+    points.push('Assistência precisa ser conferida antes da proposta.');
+  }
+  points.push('Limites de cada cobertura serão detalhados pelo corretor antes da proposta.');
+  return points.slice(0, 3);
+}
+
+function buildNoteResidencial(option: BaseOption): string {
+  if (!isCoverageEmpty(option.coverage.assistance)) {
+    return 'Cobertura básica do imóvel com assistência incluída; vale comparar os limites de cada cobertura.';
+  }
+  return 'Cobertura básica do imóvel com os limites solicitados; o corretor confirma os detalhes antes da proposta.';
+}
+
+function buildBadges(option: BaseOption): string[] {
   const badges = new Set<string>();
   if (option.category === 'principal') badges.add('Produto principal');
   if (option.coverage.isComprehensive) badges.add('Compreensiva');
@@ -244,7 +295,7 @@ function buildBadges(option: Omit<QuoteOptionSummary, 'rank' | 'badges' | 'consu
   return Array.from(badges).slice(0, 4);
 }
 
-function buildAttentionPoints(option: Omit<QuoteOptionSummary, 'rank' | 'badges' | 'consultativeNote' | 'attentionPoints'>): string[] {
+function buildAttentionPoints(option: BaseOption): string[] {
   const points: string[] = [];
   if (!option.coverage.isComprehensive) {
     points.push('Não é a alternativa mais ampla de cobertura.');
@@ -261,9 +312,7 @@ function buildAttentionPoints(option: Omit<QuoteOptionSummary, 'rank' | 'badges'
   return points.slice(0, 3);
 }
 
-function buildNote(
-  option: Omit<QuoteOptionSummary, 'rank' | 'badges' | 'consultativeNote' | 'attentionPoints'>,
-): string {
+function buildNote(option: BaseOption): string {
   if (!option.coverage.isComprehensive) {
     return 'Boa alternativa econômica, mas deve ser comparada com atenção porque não entrega a cobertura mais ampla.';
   }
@@ -283,7 +332,8 @@ function flattenResults(body: ResultadoResponse): JsonRecord[] {
   return asArray(body.results).flatMap((group) => asArray(asRecord(group).results).map(asRecord));
 }
 
-function normalizeOptions(body: ResultadoResponse): QuoteOptionSummary[] {
+function normalizeOptions(body: ResultadoResponse, ramo: QuoteRamo): QuoteOptionSummary[] {
+  const residencial = ramo === 'residencial';
   const rawOptions = flattenResults(body)
     .filter((raw) => stringValue(raw.status) && numberValue(raw.premium) !== null)
     .filter((raw) => stringValue(raw.status) !== 'error');
@@ -303,7 +353,7 @@ function normalizeOptions(body: ResultadoResponse): QuoteOptionSummary[] {
     const franchise = numberValue(raw.franchise);
     const coverage = buildCoverage(raw);
     const price = Math.round(((maxPremium - annualPremium) / spread) * 100);
-    const coveragePoints = coverageScore(coverage, franchise);
+    const coveragePoints = residencial ? coverageScoreResidencial(coverage) : coverageScore(coverage, franchise);
     const status = stringValue(raw.status);
     const category: QuoteOptionSummary['category'] = status === 'additional_product' ? 'adicional' : 'principal';
     const option = {
@@ -328,9 +378,9 @@ function normalizeOptions(body: ResultadoResponse): QuoteOptionSummary[] {
 
     return {
       ...option,
-      badges: buildBadges(option),
-      consultativeNote: buildNote(option),
-      attentionPoints: buildAttentionPoints(option),
+      badges: residencial ? buildBadgesResidencial(option) : buildBadges(option),
+      consultativeNote: residencial ? buildNoteResidencial(option) : buildNote(option),
+      attentionPoints: residencial ? buildAttentionPointsResidencial(option) : buildAttentionPoints(option),
     };
   });
 
@@ -340,6 +390,44 @@ function normalizeOptions(body: ResultadoResponse): QuoteOptionSummary[] {
       return a.annualPremium - b.annualPremium;
     })
     .map((option, index) => ({ ...option, rank: index + 1 }));
+}
+
+/**
+ * Residencial não tem FIPE nem "compreensiva": toda opção carrega a cobertura básica
+ * pedida na cotação, então o menor prêmio é o ponto de partida honesto.
+ */
+function pickRecommendationsResidencial(options: QuoteOptionSummary[]): QuoteRecommendation[] {
+  const principal = options.filter((option) => option.category === 'principal');
+  const pool = principal.length > 0 ? principal : options;
+  const cheapest = [...pool].sort((a, b) => a.annualPremium - b.annualPremium)[0] ?? options[0];
+  const balancedPool = pool.filter((option) => option.id !== cheapest.id);
+  const balanced = [...(balancedPool.length > 0 ? balancedPool : pool)]
+    .sort((a, b) => b.scores.balance - a.scores.balance)[0] ?? cheapest;
+  const complete = [...pool].sort((a, b) => {
+    if (b.scores.coverage !== a.scores.coverage) return b.scores.coverage - a.scores.coverage;
+    return a.annualPremium - b.annualPremium;
+  })[0] ?? balanced;
+
+  return [
+    {
+      role: 'cheap',
+      title: 'Menor preço',
+      optionId: cheapest.id,
+      reason: 'Menor prêmio anual entre as opções principais, com a cobertura básica solicitada.',
+    },
+    {
+      role: 'balanced',
+      title: 'Melhor equilíbrio',
+      optionId: balanced.id,
+      reason: 'Nossa sugestão inicial: preço competitivo com a cobertura básica e assistência do imóvel.',
+    },
+    {
+      role: 'complete',
+      title: 'Mais completa',
+      optionId: complete.id,
+      reason: 'Indicada quando assistência e amplitude da proteção do imóvel pesam mais que o menor preço.',
+    },
+  ];
 }
 
 function pickRecommendations(options: QuoteOptionSummary[]): QuoteRecommendation[] {
@@ -376,11 +464,34 @@ function pickRecommendations(options: QuoteOptionSummary[]): QuoteRecommendation
   ];
 }
 
+function advisorBulletsResidencial(preference: CoveragePreference, agentName: string): string[] {
+  if (preference === 'Economia') {
+    return [
+      'Opções principais primeiro: menor preço com a cobertura básica do imóvel pesa mais que centavos a menos.',
+      'Os limites de cada cobertura entram na decisão pra evitar surpresa em sinistro.',
+      'Assistência residencial fica separada pra comparação justa.',
+    ];
+  }
+  if (preference === 'Proteção') {
+    return [
+      `Score ${agentName} prioriza assistência ampla e amplitude de cobertura do imóvel.`,
+      'Cobertura básica de incêndio é o alicerce; as demais coberturas ampliam a proteção.',
+      'Vale conferir a rede de assistência da seguradora pra ter conforto em sinistro.',
+    ];
+  }
+  return [
+    'Compare primeiro as opções principais e deixe produtos adicionais como alternativa de economia.',
+    'Preço e limites de cobertura precisam aparecer juntos para evitar decisão só pelo menor valor.',
+    'Posso te explicar qualquer cobertura — é só perguntar antes de decidir.',
+  ];
+}
+
 function buildAdvisor(
   recommendations: QuoteRecommendation[],
   options: QuoteOptionSummary[],
   agentName: string,
   customer?: QuoteCustomerInfo,
+  ramo: QuoteRamo = 'auto',
 ): QuoteSummary['advisor'] {
   const preference = customer?.coveragePreference ?? null;
   const role = preference === 'Economia'
@@ -398,7 +509,9 @@ function buildAdvisor(
       : `${option.productName} aparece como ${preference ? `melhor opção pra quem priorizou ${preference}` : 'melhor equilíbrio para iniciar a conversa consultiva'}.`)
     : 'Ainda não há opções suficientes para recomendar com segurança.';
 
-  const bullets = preference === 'Economia'
+  const bullets = ramo === 'residencial'
+    ? advisorBulletsResidencial(preference, agentName)
+    : preference === 'Economia'
     ? [
         'Opções principais primeiro: menor preço com cobertura compreensiva pesa mais que centavos a menos.',
         'Franquia e percentual FIPE entram na decisão pra evitar surpresa em sinistro.',
@@ -420,6 +533,50 @@ function buildAdvisor(
     headline: `Recomendação ${agentName}`,
     summary,
     bullets,
+  };
+}
+
+/** Primeiro valor não vazio entre chaves alternativas — o shape residencial ainda não foi congelado. */
+function pickText(payload: JsonRecord, keys: string[]): string {
+  for (const key of keys) {
+    const value = stringValue(payload[key]);
+    if (value) return value;
+  }
+  return '';
+}
+
+const SEGMENT_LABEL: Record<string, string> = {
+  house: 'Casa',
+  apartment: 'Apartamento',
+  casa: 'Casa',
+  apartamento: 'Apartamento',
+};
+
+/**
+ * Rótulo do imóvel no bloco `vehicle`. Endereço curto SEM número: a sala é um
+ * link compartilhável, e o número do imóvel não precisa aparecer nela.
+ */
+function buildProperty(body: ResultadoResponse): QuoteSummary['vehicle'] {
+  const quotePayload = getRecord(asRecord(body.data), 'data');
+  const payload = isRecord(quotePayload.residence)
+    ? asRecord(quotePayload.residence)
+    : getRecord(quotePayload, 'property');
+  const segmentKey = pickText(payload, ['segment', 'tipo', 'type']).toLowerCase();
+  const brand = SEGMENT_LABEL[segmentKey] ?? '';
+  const street = pickText(payload, ['street', 'logradouro', 'address']);
+  const neighborhood = pickText(payload, ['neighborhood', 'bairro']);
+  const city = pickText(payload, ['city', 'cidade', 'localidade']);
+  const state = pickText(payload, ['state', 'uf', 'estado']);
+  const cityState = [city, state].filter(Boolean).join('/');
+  const model = [street, neighborhood, cityState].filter(Boolean).join(' · ');
+  return {
+    label: 'Imóvel',
+    brand,
+    model,
+    modelYear: null,
+    manufactureYear: null,
+    fipeCode: '',
+    fipeValue: null,
   };
 }
 
@@ -459,14 +616,17 @@ export function normalizeQuoteSummary(
   response: SegfyResponse<ResultadoResponse>,
   customerOverride?: QuoteCustomerInfo,
   agentName: string = 'Robocote',
+  ramo: QuoteRamo = 'auto',
 ): QuoteSummary {
   const body = response.body;
-  const options = normalizeOptions(body);
+  const options = normalizeOptions(body, ramo);
   if (options.length === 0) {
-    throw new Error('A Segfy não retornou opções calculadas para esta cotação.');
+    throw new Error('As seguradoras ainda não retornaram opções calculadas para esta cotação.');
   }
 
-  const recommendations = pickRecommendations(options);
+  const recommendations = ramo === 'residencial'
+    ? pickRecommendationsResidencial(options)
+    : pickRecommendations(options);
   const premiumValues = options.map((option) => option.annualPremium);
   const insurers = new Set(options.map((option) => option.insurerKey).filter(Boolean));
   const quoteData = getRecord(getRecord(asRecord(body.data), 'data'), 'data');
@@ -479,10 +639,11 @@ export function normalizeQuoteSummary(
     guid: stringValue(body.guid),
     quotationId: stringValue(body.quotation_id, stringValue(body.id)),
     agentName,
+    ramo,
     quoteDate: stringValue(quotePayload.quotation_date) || stringValue(quoteData.quotation_date) || null,
     validUntil: stringValue(quotePayload.validity_budget) || stringValue(quoteData.validity_budget) || null,
     customer,
-    vehicle: buildVehicle(body),
+    vehicle: ramo === 'residencial' ? buildProperty(body) : buildVehicle(body),
     metrics: {
       optionCount: options.length,
       principalCount: options.filter((option) => option.category === 'principal').length,
@@ -493,18 +654,35 @@ export function normalizeQuoteSummary(
     },
     recommendations,
     selectedRecommendation: 'balanced',
-    advisor: buildAdvisor(recommendations, options, agentName, customer),
+    advisor: buildAdvisor(recommendations, options, agentName, customer, ramo),
     options,
     generatedAt: new Date().toISOString(),
   };
+}
+
+/** GUIDs residenciais já despejados — a bancada do Jera precisa de UM dump bruto por cotação, não um por refresh da sala. */
+const RESIDENCIAL_DUMPED = new Set<string>();
+
+async function dumpResidencialBruto(guid: string, response: SegfyResponse<ResultadoResponse>): Promise<void> {
+  if (RESIDENCIAL_DUMPED.has(guid)) return;
+  RESIDENCIAL_DUMPED.add(guid);
+  try {
+    await dumpJSON(`show_results_residencial_bruto_${guid}`, response.body);
+  } catch (e) {
+    console.warn('[quote] falha ao gravar dump bruto residencial:', (e as Error).message);
+  }
 }
 
 export async function getQuoteSummary(
   guid: string,
   customerOverride?: QuoteCustomerInfo,
   agentName: string = 'Robocote',
+  ramo: QuoteRamo = 'auto',
 ): Promise<QuoteSummary> {
-  return normalizeQuoteSummary(await getResultado({ guid }), customerOverride, agentName);
+  // auto/moto/caminhão rodam no mesmo motor 'vehicle'; só residencial tem path próprio.
+  const response = await getResultado({ guid }, ramo === 'residencial' ? 'residence' : 'vehicle');
+  if (ramo === 'residencial') await dumpResidencialBruto(guid, response);
+  return normalizeQuoteSummary(response, customerOverride, agentName, ramo);
 }
 
 export { isCoverageEmpty };

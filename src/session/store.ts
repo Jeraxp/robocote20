@@ -50,6 +50,25 @@ const ACTIVE_STEPS = [
   'driver_birth_date',
   'driver_sex',
   'quote_link',
+  // Residencial (ordem em core/conversation/steps.ts RESIDENCIAL_STEP_ORDER).
+  'res_zip',
+  'res_street',
+  'res_neighborhood',
+  'res_city',
+  'res_state',
+  'res_number',
+  'res_complement',
+  'res_segment',
+  'res_construction',
+  'res_residence_type',
+  'res_building_value',
+  'res_content_value',
+  'res_condominium',
+  'res_alarm',
+  'res_grills',
+  'res_countryside',
+  'res_owner',
+  'res_new',
 ] as const;
 /**
  * Steps de intake (roteamento) que antecedem a jornada de captura (Jera 2026-05-31):

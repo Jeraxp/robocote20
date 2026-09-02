@@ -14,17 +14,21 @@ import type { SessionState } from '../../session/store.js';
 import type { VehicleRamo } from '../../tenant/quoteConfig.js';
 import { extractFirstName } from './language.js';
 
-export /** Rótulos PT-BR dos ramos vehicle pra menu de seleção e confirmações. */
-const RAMO_LABELS: Record<VehicleRamo, string> = {
+/** Ramos que já têm jornada conversacional. Residencial roda no motor Segfy `residence`. */
+export type JourneyRamo = VehicleRamo | 'residencial';
+
+export /** Rótulos PT-BR dos ramos com jornada pra menu de seleção e confirmações. */
+const RAMO_LABELS: Record<JourneyRamo, string> = {
   auto: 'Seguro de Carro',
   moto: 'Seguro de Moto',
   caminhao: 'Seguro de Caminhão',
+  residencial: 'Seguro Residencial',
 };
 
 /** Lê o ramo cravado na sessão (answer insurance_branch); sem escolha = auto. */
-export function ramoFromAnswers(answers: Record<string, { rawValue?: string; value?: string }> = {}): VehicleRamo {
+export function ramoFromAnswers(answers: Record<string, { rawValue?: string; value?: string }> = {}): JourneyRamo {
   const raw = answers.insurance_branch?.rawValue;
-  return raw === 'moto' || raw === 'caminhao' ? raw : 'auto';
+  return raw === 'moto' || raw === 'caminhao' || raw === 'residencial' ? raw : 'auto';
 }
 
 /**
@@ -49,8 +53,9 @@ const RAMO_WORDING: Record<Exclude<VehicleRamo, 'auto'>, Array<[string, string]>
   ],
 };
 
-export function applyRamoWording(text: string, ramo: VehicleRamo): string {
-  if (ramo === 'auto') return text;
+export function applyRamoWording(text: string, ramo: JourneyRamo): string {
+  // Residencial tem prompts próprios (res_*) — não há locução de veículo pra trocar.
+  if (ramo === 'auto' || ramo === 'residencial') return text;
   let out = text;
   for (const [de, para] of RAMO_WORDING[ramo]) {
     out = out.split(de).join(para);
@@ -87,7 +92,43 @@ export const STEP_ORDER = [
   'quote_link',
 ] as const;
 
-export type StepId = (typeof STEP_ORDER)[number];
+/**
+ * Jornada residencial em MODO VALIDAÇÃO (Jera 01/09): pergunta tudo que o motor
+ * `residence` exige pra entendermos o retorno das seguradoras; o corte pro funil
+ * curto vem depois, com quem conhece o produto. Os 4 steps de endereço só
+ * aparecem quando o lookup do CEP não os preencheu.
+ */
+export const RESIDENCIAL_STEP_ORDER = [
+  'name',
+  'res_zip',
+  'res_street',
+  'res_neighborhood',
+  'res_city',
+  'res_state',
+  'res_number',
+  'res_complement',
+  'res_segment',
+  'res_construction',
+  'res_residence_type',
+  'res_building_value',
+  'res_content_value',
+  'res_condominium',
+  'res_alarm',
+  'res_grills',
+  'res_countryside',
+  'res_owner',
+  'res_new',
+  'renewal_status',
+  'renewal_bonus',
+  'driver_sex',
+  'document',
+  'quote_link',
+] as const;
+
+export type StepId = (typeof STEP_ORDER)[number] | (typeof RESIDENCIAL_STEP_ORDER)[number];
+
+/** Steps de endereço que o lookup de CEP pode responder pelo lead. */
+export const RES_ADDRESS_STEPS = ['res_street', 'res_neighborhood', 'res_city', 'res_state'] as const;
 
 export /** Pergunta padrão da Robocotepra cada step — usado quando avançamos via confirmação direta. */
 const STEP_PROMPT: Record<StepId, string> = {
@@ -118,6 +159,25 @@ const STEP_PROMPT: Record<StepId, string> = {
   driver_birth_date: 'Não consegui puxar seus dados cadastrais. Pode me passar a sua data de nascimento? (DD/MM/AAAA)',
   driver_sex: 'E o sexo que consta no cadastro — masculino ou feminino?',
   quote_link: 'Pronto. Posso calcular agora?',
+  // Residencial
+  res_zip: 'Qual o CEP do imóvel que você quer segurar? Pode mandar só os números.',
+  res_street: 'Qual o nome da rua? (Só o nome, sem o número.)',
+  res_neighborhood: 'Qual o bairro?',
+  res_city: 'Qual a cidade?',
+  res_state: 'Qual o estado? Pode ser a sigla — SC, SP, RJ…',
+  res_number: 'Qual o número do imóvel?',
+  res_complement: 'Tem complemento — apartamento, bloco, casa dos fundos? Se não tiver, é só dizer "não".',
+  res_segment: 'O imóvel é casa ou apartamento?',
+  res_construction: 'A construção é de alvenaria, madeira ou mista?',
+  res_residence_type: 'É a sua moradia habitual ou uma casa de veraneio?',
+  res_building_value: 'Quanto vale a construção do imóvel, sem contar o terreno? Pode ser aproximado — ex.: 350 mil.',
+  res_content_value: 'E o conteúdo — móveis, eletrônicos, eletrodomésticos? Um valor aproximado, ex.: 50 mil.',
+  res_condominium: 'O imóvel fica em condomínio fechado?',
+  res_alarm: 'Tem alarme contra roubo?',
+  res_grills: 'As janelas têm grade?',
+  res_countryside: 'Fica em zona rural?',
+  res_owner: 'Você é o proprietário do imóvel?',
+  res_new: 'Em caso de sinistro, quer a reposição pelo valor de novo (sem desconto pelo uso)?',
 };
 
 export /**
@@ -125,6 +185,10 @@ export /**
  * Steps condicionais do questionário de risco (Jera 2026-05-17).
  */
 function shouldSkipStep(stepId: StepId, answers: Record<string, { rawValue?: string; value?: string }>): boolean {
+  // Endereço já veio do lookup de CEP → não perguntar o que a base respondeu.
+  if ((RES_ADDRESS_STEPS as readonly string[]).includes(stepId)) {
+    return Boolean(answers[stepId]?.rawValue);
+  }
   if (stepId === 'main_driver_document') {
     return answers.is_main_driver?.rawValue === 'yes';
   }
@@ -151,11 +215,23 @@ function shouldSkipStep(stepId: StepId, answers: Record<string, { rawValue?: str
   return false;
 }
 
+/**
+ * Ordem de perguntas do ramo cravado na sessão. Se o step atual não pertence a
+ * ela (sessão semeada sem insurance_branch, por exemplo), vale a ordem que o
+ * contém — um step nunca pode ficar sem sucessor por causa do rótulo do ramo.
+ */
+function stepOrderFor(stepId: StepId, answers: Record<string, { rawValue?: string; value?: string }>): readonly StepId[] {
+  const preferred: readonly StepId[] = ramoFromAnswers(answers) === 'residencial' ? RESIDENCIAL_STEP_ORDER : STEP_ORDER;
+  if (preferred.includes(stepId)) return preferred;
+  return preferred === STEP_ORDER ? RESIDENCIAL_STEP_ORDER : STEP_ORDER;
+}
+
 export function nextStepAfter(stepId: StepId, answers: Record<string, { rawValue?: string; value?: string }> = {}): SessionState['stepId'] {
-  const idx = STEP_ORDER.indexOf(stepId);
-  if (idx === -1 || idx >= STEP_ORDER.length - 1) return 'complete';
-  for (let i = idx + 1; i < STEP_ORDER.length; i += 1) {
-    const candidate = STEP_ORDER[i];
+  const order = stepOrderFor(stepId, answers);
+  const idx = order.indexOf(stepId);
+  if (idx === -1 || idx >= order.length - 1) return 'complete';
+  for (let i = idx + 1; i < order.length; i += 1) {
+    const candidate = order[i];
     if (!shouldSkipStep(candidate, answers)) return candidate;
   }
   return 'complete';
@@ -210,7 +286,7 @@ function applyProposalAndAdvance(
 }
 
 export /** Crava o ramo escolhido como answer e move a sessão pro 1º step da jornada (name). */
-function setBranchAndStartJourney(session: SessionState, ramo: VehicleRamo): SessionState {
+function setBranchAndStartJourney(session: SessionState, ramo: JourneyRamo): SessionState {
   return {
     ...session,
     stepId: 'name',

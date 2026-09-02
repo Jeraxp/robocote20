@@ -1,4 +1,5 @@
 import { segfyPOST, type SegfyResponse } from './client.js';
+import { segfyRamoPath, type SegfyRamo } from './calcular.js';
 
 export interface ResultadoRequest {
   guid?: string;
@@ -16,13 +17,15 @@ export interface ResultadoResponse {
 }
 
 /**
- * POST /api/vehicle/version/1.0/show-results — Nova Jornada.
+ * POST /api/<ramo>/version/1.0/show-results — Nova Jornada.
  *
  * Fallback de reconciliação: recupera resultados já chegados de uma cotação.
  * Em tempo real, use socket.io aberto antes de `/calculate`.
+ * O body é idêntico entre vehicle e residence; só o path muda.
  */
 export async function getResultado(
   request: ResultadoRequest | string,
+  ramo: SegfyRamo = 'vehicle',
 ): Promise<SegfyResponse<ResultadoResponse>> {
   const data = typeof request === 'string'
     ? { guid: request, id: '', multicalculo_id: '' }
@@ -33,7 +36,7 @@ export async function getResultado(
       };
 
   return segfyPOST<ResultadoResponse>(
-    '/api/vehicle/version/1.0/show-results',
+    segfyRamoPath(ramo, 'show-results'),
     { data },
     `show_results_${data.guid || data.id || data.multicalculo_id || 'unknown'}`,
     'body_config_token',

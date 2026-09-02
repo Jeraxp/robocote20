@@ -7,8 +7,7 @@
  */
 
 import type { SessionState } from '../../session/store.js';
-import type { VehicleRamo } from '../../tenant/quoteConfig.js';
-import { RAMO_LABELS } from './steps.js';
+import { RAMO_LABELS, type JourneyRamo } from './steps.js';
 import { isValidPlateFormat, normalizePlate } from '../../segfy/placa.js';
 
 export /** Pergunta 1 do intake (Jera 2026-05-31): cotação vs atendimento humano. */
@@ -46,13 +45,13 @@ function parseServiceType(text: string): 'cotacao' | 'atendimento' | null {
 }
 
 export /** Monta a pergunta 2 do intake com os ramos ativos numerados. */
-function buildBranchQuestion(ramos: VehicleRamo[]): string {
+function buildBranchQuestion(ramos: JourneyRamo[]): string {
   const options = ramos.map((r, i) => `${i + 1}️⃣ ${RAMO_LABELS[r]}`).join('\n\n');
   return `Para qual seguro você quer a cotação?\n\n${options}`;
 }
 
 export /** Interpreta a escolha do ramo: por número (posição no menu) ou por palavra-chave. */
-function parseBranchChoice(text: string, ramos: VehicleRamo[]): VehicleRamo | null {
+function parseBranchChoice(text: string, ramos: JourneyRamo[]): JourneyRamo | null {
   const m = normalizeMsg(text);
   if (!m) return null;
   const numMatch = m.match(/^(\d+)\b/);
@@ -60,10 +59,12 @@ function parseBranchChoice(text: string, ramos: VehicleRamo[]): VehicleRamo | nu
     const idx = Number(numMatch[1]) - 1;
     if (idx >= 0 && idx < ramos.length) return ramos[idx];
   }
-  const byKeyword: Array<{ ramo: VehicleRamo; re: RegExp }> = [
+  const byKeyword: Array<{ ramo: JourneyRamo; re: RegExp }> = [
     { ramo: 'auto', re: /\bcarro|\bauto|\bautomovel|\bveiculo\b/ },
     { ramo: 'moto', re: /\bmoto|\bmotocicleta|\bscooter/ },
     { ramo: 'caminhao', re: /\bcaminh|\btruck|\bcarreta/ },
+    // normalizeMsg já tirou acentos: "residência"→"residencia", "imóvel"→"imovel".
+    { ramo: 'residencial', re: /\bcasa\b|\bresidenc|\bimovel|\bapartamento|\bapto\b|\blar\b/ },
   ];
   for (const { ramo, re } of byKeyword) {
     if (ramos.includes(ramo) && re.test(m)) return ramo;
@@ -203,6 +204,12 @@ function extractPlateFromMessage(message: string): string | null {
     if (isValidPlateFormat(m)) return normalizePlate(m);
   }
   return null;
+}
+
+export /** Extrai um CEP (8 dígitos, com ou sem hífen) de qualquer mensagem. */
+function extractZipFromMessage(text: string): string | null {
+  const match = text.match(/\b\d{5}-?\d{3}\b/);
+  return match ? match[0].replace(/\D/g, '') : null;
 }
 
 export /** Extrai CPF válido (com DV correto) de qualquer mensagem. */

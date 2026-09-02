@@ -60,6 +60,10 @@ export interface WhatsappInstanceRecord {
   tenantId: string;
   evolutionInstanceName: string;
   ownerPhone: string | null;
+  /** phone_number_id da Graph — a chave estável do número OFICIAL (o display muda; o id não). */
+  cloudPhoneNumberId: string | null;
+  /** Derivado: com id oficial é 'cloudapi'; o resto é legado Evolution (QR), em extinção. */
+  channel: 'cloudapi' | 'evolution';
   status: string;
   lastConnectionState: string | null;
   lastQrAt: string | null;
@@ -67,6 +71,14 @@ export interface WhatsappInstanceRecord {
   disconnectedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Número oficial já pertence a outra corretora — a rota traduz em 409. */
+export class WhatsappNumberTakenError extends Error {
+  constructor(public readonly cloudPhoneNumberId: string) {
+    super('este número já está cadastrado para outra corretora');
+    this.name = 'WhatsappNumberTakenError';
+  }
 }
 
 export interface AdminStore {
@@ -79,6 +91,7 @@ export interface AdminStore {
     tenantId: string;
     evolutionInstanceName: string;
     ownerPhone?: string;
+    cloudPhoneNumberId?: string;
     status?: WhatsappInstanceRecord['status'];
   }): Promise<WhatsappInstanceRecord>;
   updateWhatsappInstance(instanceName: string, patch: {
@@ -165,6 +178,8 @@ function rowWhatsapp(row: Record<string, unknown>): WhatsappInstanceRecord {
     tenantId: String(row.tenant_id),
     evolutionInstanceName: String(row.evolution_instance_name),
     ownerPhone: typeof row.owner_phone === 'string' ? row.owner_phone : null,
+    cloudPhoneNumberId: typeof row.cloud_phone_number_id === 'string' ? row.cloud_phone_number_id : null,
+    channel: typeof row.cloud_phone_number_id === 'string' ? 'cloudapi' : 'evolution',
     status: String(row.status),
     lastConnectionState: typeof row.last_connection_state === 'string' ? row.last_connection_state : null,
     lastQrAt: row.last_qr_at ? iso(row.last_qr_at) : null,
@@ -175,7 +190,7 @@ function rowWhatsapp(row: Record<string, unknown>): WhatsappInstanceRecord {
   };
 }
 
-class InMemoryAdminStore implements AdminStore {
+export class InMemoryAdminStore implements AdminStore {
   private readonly tenants: TenantRecord[] = [
     {
       id: process.env.ROBOCOTE_TENANT_ID?.trim() || 'rpi',
@@ -319,17 +334,23 @@ class InMemoryAdminStore implements AdminStore {
     tenantId: string;
     evolutionInstanceName: string;
     ownerPhone?: string;
+    cloudPhoneNumberId?: string;
     status?: WhatsappInstanceRecord['status'];
   }): Promise<WhatsappInstanceRecord> {
     const now = new Date().toISOString();
     const existing = [...this.whatsapp.values()].find((item) => item.evolutionInstanceName === input.evolutionInstanceName);
     if (existing) return existing;
+    if (input.cloudPhoneNumberId && [...this.whatsapp.values()].some((item) => item.cloudPhoneNumberId === input.cloudPhoneNumberId)) {
+      throw new WhatsappNumberTakenError(input.cloudPhoneNumberId);
+    }
 
     const record: WhatsappInstanceRecord = {
       id: randomUUID(),
       tenantId: input.tenantId,
       evolutionInstanceName: input.evolutionInstanceName,
       ownerPhone: input.ownerPhone || null,
+      cloudPhoneNumberId: input.cloudPhoneNumberId || null,
+      channel: input.cloudPhoneNumberId ? 'cloudapi' : 'evolution',
       status: input.status ?? 'created',
       lastConnectionState: null,
       lastQrAt: null,
@@ -490,22 +511,41 @@ class PostgresAdminStore implements AdminStore {
     tenantId: string;
     evolutionInstanceName: string;
     ownerPhone?: string;
+    cloudPhoneNumberId?: string;
     status?: WhatsappInstanceRecord['status'];
   }): Promise<WhatsappInstanceRecord> {
     const pool = getPostgresPool();
-    const result = await pool.query(`
-      insert into whatsapp_instances (id, tenant_id, evolution_instance_name, owner_phone, status)
-      values ($1, $2, $3, $4, $5)
-      on conflict (evolution_instance_name) do update set
-        owner_phone = coalesce(excluded.owner_phone, whatsapp_instances.owner_phone),
-        status = case
-          when whatsapp_instances.status = 'connected' then whatsapp_instances.status
-          else excluded.status
-        end,
-        updated_at = now()
-      returning *
-    `, [randomUUID(), input.tenantId, input.evolutionInstanceName, input.ownerPhone || null, input.status ?? 'created']);
-    return rowWhatsapp(result.rows[0]);
+    try {
+      const result = await pool.query(`
+        insert into whatsapp_instances (id, tenant_id, evolution_instance_name, owner_phone, status, cloud_phone_number_id)
+        values ($1, $2, $3, $4, $5, $6)
+        on conflict (evolution_instance_name) do update set
+          owner_phone = coalesce(excluded.owner_phone, whatsapp_instances.owner_phone),
+          cloud_phone_number_id = coalesce(excluded.cloud_phone_number_id, whatsapp_instances.cloud_phone_number_id),
+          status = case
+            when whatsapp_instances.status = 'connected' then whatsapp_instances.status
+            else excluded.status
+          end,
+          updated_at = now()
+        returning *
+      `, [
+        randomUUID(),
+        input.tenantId,
+        input.evolutionInstanceName,
+        input.ownerPhone || null,
+        input.status ?? 'created',
+        input.cloudPhoneNumberId || null,
+      ]);
+      return rowWhatsapp(result.rows[0]);
+    } catch (e) {
+      // Índice único parcial em cloud_phone_number_id: o mesmo número NUNCA pode
+      // atender duas corretoras — é o guard-rail contra vazamento entre clientes.
+      const err = e as { code?: string; constraint?: string };
+      if (err.code === '23505' && (err.constraint ?? '').includes('cloud_phone_number_id') && input.cloudPhoneNumberId) {
+        throw new WhatsappNumberTakenError(input.cloudPhoneNumberId);
+      }
+      throw e;
+    }
   }
 
   async updateWhatsappInstance(instanceName: string, patch: {

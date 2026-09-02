@@ -39,9 +39,39 @@ const ACTIVE_STEPS = [
   'driver_birth_date',
   'driver_sex',
   'quote_link',
+  // Residencial (ordem em core/conversation/steps.ts RESIDENCIAL_STEP_ORDER).
+  'res_zip',
+  'res_street',
+  'res_neighborhood',
+  'res_city',
+  'res_state',
+  'res_number',
+  'res_complement',
+  'res_segment',
+  'res_construction',
+  'res_residence_type',
+  'res_building_value',
+  'res_content_value',
+  'res_condominium',
+  'res_alarm',
+  'res_grills',
+  'res_countryside',
+  'res_owner',
+  'res_new',
 ] as const;
 
 type ActiveStepId = (typeof ACTIVE_STEPS)[number];
+
+/** Steps residenciais de sim/não — viram 'yes'|'no' por regra local, sem IA. */
+const RES_BOOLEAN_STEPS: ReadonlySet<string> = new Set([
+  'res_condominium', 'res_alarm', 'res_grills', 'res_countryside', 'res_owner', 'res_new',
+]);
+
+/** Steps de valor em R$ — rawValue é string de dígitos (inteiro em reais). */
+const RES_MONEY_STEPS: ReadonlySet<string> = new Set(['res_building_value', 'res_content_value']);
+
+/** Steps residenciais de texto livre curto (endereço). */
+const RES_FREE_TEXT_STEPS: ReadonlySet<string> = new Set(['res_street', 'res_neighborhood', 'res_city']);
 
 const channelSchema = z.enum(['webchat', 'whatsapp']).optional().default('webchat');
 type Channel = z.infer<typeof channelSchema>;
@@ -180,6 +210,50 @@ const CHOICES: Partial<Record<ActiveStepId, Choice[]>> = {
     { label: 'Sim, com garagem fechada', value: 'yes', terms: ['sim', 'tem', 's', 'fechada'] },
     { label: 'Não tem', value: 'no', terms: ['nao', 'não', 'sem garagem', 'rua', 'n'] },
   ],
+  driver_sex: [
+    { label: 'Masculino', value: 'male', terms: ['masculino', 'masc', 'homem'] },
+    { label: 'Feminino', value: 'female', terms: ['feminino', 'fem', 'mulher'] },
+  ],
+  // Residencial — values são os enums do motor `residence`.
+  res_segment: [
+    { label: 'Casa', value: 'house', terms: ['casa', 'sobrado', 'terrea', 'térrea'] },
+    { label: 'Apartamento', value: 'apartment', terms: ['apartamento', 'apto', 'ap.', 'cobertura', 'flat'] },
+  ],
+  res_construction: [
+    { label: 'Alvenaria', value: 'masonry', terms: ['alvenaria', 'tijolo', 'concreto', 'bloco'] },
+    { label: 'Madeira', value: 'wood', terms: ['madeira'] },
+    { label: 'Mista', value: 'mixed', terms: ['mista', 'misto', 'metade'] },
+  ],
+  res_residence_type: [
+    { label: 'Moradia habitual', value: 'habitual', terms: ['habitual', 'moradia', 'principal', 'todo dia', 'fixa', 'resido'] },
+    { label: 'Veraneio', value: 'summer_house', terms: ['veraneio', 'praia', 'temporada', 'fim de semana', 'final de semana', 'lazer', 'campo'] },
+  ],
+  // Sim/não: o texto livre é resolvido por parseYesNo antes de chegar aqui; os
+  // terms ficam vazios de propósito pra 'includes' não casar letra solta.
+  res_condominium: [
+    { label: 'Sim', value: 'yes', terms: [] },
+    { label: 'Não', value: 'no', terms: [] },
+  ],
+  res_alarm: [
+    { label: 'Sim', value: 'yes', terms: [] },
+    { label: 'Não', value: 'no', terms: [] },
+  ],
+  res_grills: [
+    { label: 'Sim', value: 'yes', terms: [] },
+    { label: 'Não', value: 'no', terms: [] },
+  ],
+  res_countryside: [
+    { label: 'Sim', value: 'yes', terms: [] },
+    { label: 'Não', value: 'no', terms: [] },
+  ],
+  res_owner: [
+    { label: 'Sim', value: 'yes', terms: [] },
+    { label: 'Não', value: 'no', terms: [] },
+  ],
+  res_new: [
+    { label: 'Sim', value: 'yes', terms: [] },
+    { label: 'Não', value: 'no', terms: [] },
+  ],
 };
 
 const STEP_CONTEXT: Record<ActiveStepId, { title: string; prompt: string }> = {
@@ -209,6 +283,24 @@ const STEP_CONTEXT: Record<ActiveStepId, { title: string; prompt: string }> = {
   driver_birth_date: { title: 'Nascimento', prompt: 'Não consegui puxar seus dados cadastrais. Pode me passar a sua data de nascimento? (DD/MM/AAAA)' },
   driver_sex: { title: 'Sexo', prompt: 'E o sexo que consta no cadastro — masculino ou feminino?' },
   quote_link: { title: 'Link', prompt: 'Pronto para calcular na Segfy e abrir a sala consultiva?' },
+  res_zip: { title: 'CEP do imóvel', prompt: 'Qual o CEP do imóvel que você quer segurar?' },
+  res_street: { title: 'Rua', prompt: 'Qual o nome da rua? (Só o nome, sem o número.)' },
+  res_neighborhood: { title: 'Bairro', prompt: 'Qual o bairro?' },
+  res_city: { title: 'Cidade', prompt: 'Qual a cidade?' },
+  res_state: { title: 'Estado', prompt: 'Qual o estado? Pode ser a sigla — SC, SP, RJ…' },
+  res_number: { title: 'Número', prompt: 'Qual o número do imóvel?' },
+  res_complement: { title: 'Complemento', prompt: 'Tem complemento — apartamento, bloco, casa dos fundos? Se não tiver, é só dizer "não".' },
+  res_segment: { title: 'Tipo de imóvel', prompt: 'O imóvel é casa ou apartamento?' },
+  res_construction: { title: 'Construção', prompt: 'A construção é de alvenaria, madeira ou mista?' },
+  res_residence_type: { title: 'Uso do imóvel', prompt: 'É a sua moradia habitual ou uma casa de veraneio?' },
+  res_building_value: { title: 'Valor do imóvel', prompt: 'Quanto vale a construção do imóvel, sem contar o terreno? Pode ser aproximado — ex.: 350 mil.' },
+  res_content_value: { title: 'Valor do conteúdo', prompt: 'E o conteúdo — móveis, eletrônicos, eletrodomésticos? Um valor aproximado, ex.: 50 mil.' },
+  res_condominium: { title: 'Condomínio fechado', prompt: 'O imóvel fica em condomínio fechado?' },
+  res_alarm: { title: 'Alarme', prompt: 'Tem alarme contra roubo?' },
+  res_grills: { title: 'Grades', prompt: 'As janelas têm grade?' },
+  res_countryside: { title: 'Zona rural', prompt: 'Fica em zona rural?' },
+  res_owner: { title: 'Proprietário', prompt: 'Você é o proprietário do imóvel?' },
+  res_new: { title: 'Valor de novo', prompt: 'Em caso de sinistro, quer a reposição pelo valor de novo (sem desconto pelo uso)?' },
 };
 
 function configured(): boolean {
@@ -301,6 +393,69 @@ function extractBirthDate(value: string): string | null {
       return `${cru[1]}/${cru[2]}/${cru[3]}`;
     }
   }
+  return null;
+}
+
+/**
+ * Valor em reais escrito como o lead fala: "R$ 350.000,00", "350000", "350 mil",
+ * "350k", "1,2 milhão". Devolve inteiro em reais como string de dígitos.
+ * Abaixo de R$ 1.000 devolve null — imóvel ou conteúdo nesse valor é quase
+ * sempre "350" querendo dizer "350 mil"; melhor perguntar do que cotar errado.
+ */
+function extractMoney(value: string): string | null {
+  const m = normalize(value).replace(/r\$/g, ' ');
+  const scaled = m.match(/(\d{1,3}(?:[.,]\d{1,3})?)\s*(milhoes|milhao|mil|k)\b/);
+  let reais: number | null = null;
+  if (scaled) {
+    const num = Number(scaled[1].replace(',', '.'));
+    const factor = scaled[2] === 'mil' || scaled[2] === 'k' ? 1_000 : 1_000_000;
+    reais = Math.round(num * factor);
+  } else {
+    const plain = m.match(/\d{1,3}(?:[.\s]\d{3})+(?:,\d{1,2})?|\d+(?:,\d{1,2})?/);
+    if (plain) reais = Math.floor(Number(plain[0].replace(/,\d{1,2}$/, '').replace(/[.\s]/g, '')));
+  }
+  if (reais === null || !Number.isFinite(reais) || reais < 1_000) return null;
+  return String(reais);
+}
+
+function formatMoney(digits: string): string {
+  return `R$ ${Number(digits).toLocaleString('pt-BR')}`;
+}
+
+const UF_BY_NAME: Record<string, string> = {
+  acre: 'AC', alagoas: 'AL', amapa: 'AP', amazonas: 'AM', bahia: 'BA', ceara: 'CE',
+  'distrito federal': 'DF', 'espirito santo': 'ES', goias: 'GO', maranhao: 'MA',
+  'mato grosso': 'MT', 'mato grosso do sul': 'MS', 'minas gerais': 'MG', para: 'PA',
+  paraiba: 'PB', parana: 'PR', pernambuco: 'PE', piaui: 'PI', 'rio de janeiro': 'RJ',
+  'rio grande do norte': 'RN', 'rio grande do sul': 'RS', rondonia: 'RO', roraima: 'RR',
+  'santa catarina': 'SC', 'sao paulo': 'SP', sergipe: 'SE', tocantins: 'TO',
+};
+const UF_SIGLAS: ReadonlySet<string> = new Set(Object.values(UF_BY_NAME));
+
+/** Sigla da UF a partir de "SC", "sc", "Santa Catarina" ou "estado de santa catarina". */
+function extractUf(value: string): string | null {
+  const m = normalize(value).replace(/\bestado d[eoa]s?\b/g, ' ').replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!m) return null;
+  const upper = m.toUpperCase();
+  if (UF_SIGLAS.has(upper)) return upper;
+  if (UF_BY_NAME[m]) return UF_BY_NAME[m];
+  // Nome completo dentro de frase ("moro em santa catarina") — o mais longo vence
+  // pra "mato grosso do sul" não virar "mato grosso".
+  const hit = Object.keys(UF_BY_NAME)
+    .filter((name) => new RegExp(`\\b${name}\\b`).test(m))
+    .sort((a, b) => b.length - a.length)[0];
+  if (hit) return UF_BY_NAME[hit];
+  // Sigla dentro de frase ("é SC", "fica em sp").
+  const token = m.split(' ').map((t) => t.toUpperCase()).find((t) => UF_SIGLAS.has(t));
+  return token ?? null;
+}
+
+/** Sim/não em linguagem natural. Negação vence quando as duas aparecem ("não, sim tem" é raro; "não tem" é comum). */
+function parseYesNo(value: string): 'yes' | 'no' | null {
+  const m = normalize(value).replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!m) return null;
+  if (/^(nao|n|no|nem|negativo|nenhum|nenhuma|nada)\b|\bnao\b/.test(m)) return 'no';
+  if (/^(sim|s|yes|isso|claro|positivo|tem|possui|sou|fica|com certeza|e sim|eh sim)\b|\bsim\b/.test(m)) return 'yes';
   return null;
 }
 
@@ -544,8 +699,46 @@ function localRules(request: AssistantRequest): AssistantResponse {
     );
   }
 
+  if (RES_BOOLEAN_STEPS.has(stepId)) {
+    const yn = parseYesNo(raw);
+    if (yn) return localAnswer(channel, stepId, yn, yn === 'yes' ? 'Sim' : 'Não', 0.9);
+    return localAsk(channel, stepId, 'Só preciso de um sim ou não aqui.');
+  }
+
   const choice = choiceFor(stepId, raw);
   if (choice) return localAnswer(channel, stepId, choice.value, choice.label, 0.86);
+
+  if (RES_MONEY_STEPS.has(stepId)) {
+    const money = extractMoney(raw);
+    if (money) return localAnswer(channel, stepId, money, formatMoney(money), 0.9);
+    return localAsk(channel, stepId, 'Me passa um valor aproximado em reais — pode ser "350 mil" ou "350.000".');
+  }
+  if (stepId === 'res_zip') {
+    const zip = extractZip(raw);
+    if (zip) return localAnswer(channel, stepId, zip, `${zip.slice(0, 5)}-${zip.slice(5)}`, 0.9);
+    return localAsk(channel, stepId, 'Não achei um CEP aí. Me manda os 8 números do CEP do imóvel, por favor.');
+  }
+  if (stepId === 'res_state') {
+    const uf = extractUf(raw);
+    if (uf) return localAnswer(channel, stepId, uf, uf, 0.9);
+    return localAsk(channel, stepId, 'Não reconheci o estado. Pode mandar a sigla? Ex.: SC, SP, RJ.');
+  }
+  if (stepId === 'res_number') {
+    const num = raw.replace(/\s+/g, ' ').trim();
+    if (/^(s\/?n|sem numero|sem número)$/i.test(num)) return localAnswer(channel, stepId, 'S/N', 'Sem número', 0.9);
+    if (/\d/.test(num) && num.length <= 12) return localAnswer(channel, stepId, num, num, 0.9);
+    return localAsk(channel, stepId, 'Qual o número do imóvel? Se não tiver, pode dizer "sem número".');
+  }
+  if (stepId === 'res_complement') {
+    if (/^(nao|não|n|sem|nenhum|nao tem|não tem|sem complemento)\b/i.test(normalize(raw))) {
+      return localAnswer(channel, stepId, '', 'Sem complemento', 0.9);
+    }
+    if (raw.length <= 60) return localAnswer(channel, stepId, raw, raw, 0.85);
+    return localAsk(channel, stepId, 'Pode resumir o complemento? Ex.: "apto 302", "bloco B".');
+  }
+  if (RES_FREE_TEXT_STEPS.has(stepId)) {
+    if (raw.length >= 2 && raw.length <= 80) return localAnswer(channel, stepId, raw, raw, 0.85);
+  }
 
   if (stepId === 'name') {
     if (raw.split(/\s+/).filter(Boolean).length >= 2) return localAnswer(channel, stepId, raw, raw, 0.9);
@@ -939,7 +1132,7 @@ function proposedAnswerFromRouter(
     return { stepId, value: digits, displayLabel: `${digits} km/mês`, confidence: router.confidence };
   }
 
-  if (stepId === 'zip_code') {
+  if (stepId === 'zip_code' || stepId === 'res_zip') {
     const zip = extractZip(request.message);
     if (!zip || router.value.replace(/\D/g, '') !== zip) return undefined;
     return {
@@ -948,6 +1141,25 @@ function proposedAnswerFromRouter(
       displayLabel: `${zip.slice(0, 5)}-${zip.slice(5)}`,
       confidence: router.confidence,
     };
+  }
+
+  // Valor em R$: recalcula da mensagem (a IA não normaliza "350 mil" de forma confiável).
+  if (RES_MONEY_STEPS.has(stepId)) {
+    const money = extractMoney(request.message) ?? extractMoney(router.value);
+    if (!money) return undefined;
+    return { stepId, value: money, displayLabel: formatMoney(money), confidence: router.confidence };
+  }
+
+  if (stepId === 'res_state') {
+    const uf = extractUf(request.message) ?? extractUf(router.value);
+    if (!uf) return undefined;
+    return { stepId, value: uf, displayLabel: uf, confidence: router.confidence };
+  }
+
+  if (RES_BOOLEAN_STEPS.has(stepId)) {
+    const yn = parseYesNo(request.message) ?? (router.value === 'yes' || router.value === 'no' ? router.value : null);
+    if (!yn) return undefined;
+    return { stepId, value: yn, displayLabel: yn === 'yes' ? 'Sim' : 'Não', confidence: router.confidence };
   }
 
   if (stepId === 'vehicle_brand' || stepId === 'vehicle_model') {

@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronRight,
   FileText,
+  House,
   LockKeyhole,
   MessageCircle,
   RefreshCw,
@@ -36,17 +37,29 @@ const ROBOCOTE_WA_NUMBER = '5511999999999';
 const QUOTE_DISCLAIMER =
   'Simulação sujeita a confirmação: as condições e o valor final podem variar de acordo com fatores não informados aqui.';
 
+function isResidencial(summary: QuoteSummary): boolean {
+  return summary.ramo === 'residencial';
+}
+
+/** "cotação do <bem>" — o bem é o veículo ou o imóvel, conforme o ramo. */
+function insuredSubject(summary: QuoteSummary): string {
+  if (isResidencial(summary)) {
+    return summary.vehicle.model ? `imóvel em ${summary.vehicle.model}` : 'meu imóvel';
+  }
+  return summary.vehicle.label || 'meu veículo';
+}
+
 function buildInterestMessage(option: QuoteOptionSummary, customer: QuoteCustomerInfo, summary: QuoteSummary): string {
   const greeting = customer.firstName ? `Olá! Sou ${customer.firstName}` : 'Olá!';
-  const vehicle = summary.vehicle.label || 'meu veículo';
+  const subject = insuredSubject(summary);
   const price = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(option.annualPremium);
-  return `${greeting} e quero seguir com a cotação do ${vehicle} — escolhi ${option.productName} (${option.insurerName}), prêmio anual ${price}. Cotação: ${summary.guid.slice(0, 8)}.`;
+  return `${greeting} e quero seguir com a cotação do ${subject} — escolhi ${option.productName} (${option.insurerName}), prêmio anual ${price}. Cotação: ${summary.guid.slice(0, 8)}.`;
 }
 
 function buildGeneralMessage(customer: QuoteCustomerInfo, summary: QuoteSummary): string {
   const greeting = customer.firstName ? `Olá! Sou ${customer.firstName}` : 'Olá!';
-  const vehicle = summary.vehicle.label || 'meu veículo';
-  return `${greeting} e quero conversar sobre a cotação do ${vehicle}. Cotação: ${summary.guid.slice(0, 8)}.`;
+  const subject = insuredSubject(summary);
+  return `${greeting} e quero conversar sobre a cotação do ${subject}. Cotação: ${summary.guid.slice(0, 8)}.`;
 }
 
 function waLink(message: string): string {
@@ -149,7 +162,7 @@ async function fetchQuoteSummary(guid: string): Promise<QuoteSummary> {
   return body;
 }
 
-function AppHeader({ status = 'Cotação validada pela Segfy' }: { status?: string }): JSX.Element {
+function AppHeader({ status = 'Cotação validada pelas seguradoras' }: { status?: string }): JSX.Element {
   return (
     <header className="app-header">
       <div className="brand-mark" aria-label="Robocote">
@@ -178,8 +191,8 @@ function LoadingState(): JSX.Element {
     <main className="page-shell loading-shell">
       <section className="loading-panel">
         <div className="loader-ring" />
-        <h1>Preparando sua cotação auto</h1>
-        <p>Organizando opções, coberturas e franquias em uma visão consultiva.</p>
+        <h1>Preparando sua cotação</h1>
+        <p>Organizando opções e coberturas em uma visão consultiva.</p>
       </section>
     </main>
   );
@@ -201,7 +214,22 @@ function ErrorState({ error, onRetry }: { error: string; onRetry: () => void }):
   );
 }
 
+function PropertyCard({ summary }: { summary: QuoteSummary }): JSX.Element {
+  const kind = summary.vehicle.brand;
+  return (
+    <section className="vehicle-card property-card" aria-label="Resumo do imóvel">
+      <House size={38} />
+      <div>
+        <h2>{kind ? `${summary.vehicle.label} · ${kind}` : summary.vehicle.label}</h2>
+        <p>{summary.vehicle.model || 'Endereço em validação'}</p>
+        <span>Seguro residencial</span>
+      </div>
+    </section>
+  );
+}
+
 function VehicleCard({ summary }: { summary: QuoteSummary }): JSX.Element {
+  if (isResidencial(summary)) return <PropertyCard summary={summary} />;
   return (
     <section className="vehicle-card" aria-label="Resumo do veículo">
       <Car size={38} />
@@ -267,17 +295,32 @@ function CompanyBadge({ insurerKey, insurerName }: { insurerKey: string; insurer
   );
 }
 
+function coverageFact(value: string): string {
+  return coverageLineIsHidden(value) ? 'A validar' : value;
+}
+
 function QuoteCard({
   option,
   selected,
   onSelect,
   interestHref,
+  residencial,
 }: {
   option: QuoteOptionSummary;
   selected: boolean;
   onSelect: (id: string) => void;
   interestHref: string;
+  residencial: boolean;
 }): JSX.Element {
+  const facts = residencial
+    ? [
+        { label: 'Cobertura', value: coverageFact(option.coverage.coverageType) },
+        { label: 'Assistência', value: coverageFact(option.coverage.assistance) },
+      ]
+    : [
+        { label: 'Franquia', value: formatIntegerMoney(option.franchise) },
+        { label: 'FIPE', value: option.coverage.fipePercentage ? `${option.coverage.fipePercentage}%` : 'A validar' },
+      ];
   return (
     <article className={`quote-card${selected ? ' selected' : ''}`}>
       <div className="quote-rank">{option.rank}º</div>
@@ -288,14 +331,12 @@ function QuoteCard({
         <small>{option.paymentSummary}</small>
       </div>
       <dl className="quote-facts">
-        <div>
-          <dt>Franquia</dt>
-          <dd>{formatIntegerMoney(option.franchise)}</dd>
-        </div>
-        <div>
-          <dt>FIPE</dt>
-          <dd>{option.coverage.fipePercentage ? `${option.coverage.fipePercentage}%` : 'A validar'}</dd>
-        </div>
+        {facts.map((fact) => (
+          <div key={fact.label}>
+            <dt>{fact.label}</dt>
+            <dd>{fact.value}</dd>
+          </div>
+        ))}
       </dl>
       <p className="quote-note">{option.consultativeNote}</p>
       <div className="badge-row">
@@ -322,11 +363,13 @@ function QuoteGrid({
   selectedOptionId,
   onSelect,
   buildInterestHref,
+  residencial,
 }: {
   options: QuoteOptionSummary[];
   selectedOptionId: string;
   onSelect: (id: string) => void;
   buildInterestHref: (option: QuoteOptionSummary) => string;
+  residencial: boolean;
 }): JSX.Element {
   return (
     <section className="quote-grid-section" aria-label="Opções ranqueadas">
@@ -338,6 +381,7 @@ function QuoteGrid({
             selected={selectedOptionId === option.id}
             onSelect={onSelect}
             interestHref={buildInterestHref(option)}
+            residencial={residencial}
           />
         ))}
       </div>
@@ -345,50 +389,65 @@ function QuoteGrid({
   );
 }
 
-function ComparisonTable({ options }: { options: QuoteOptionSummary[] }): JSX.Element {
-  const rows = [
-    {
-      label: 'Preço anual',
-      icon: BadgeDollarSign,
-      value: (option: QuoteOptionSummary) => formatMoney(option.annualPremium),
-    },
-    {
-      label: 'Franquia geral',
-      icon: Wrench,
-      value: (option: QuoteOptionSummary) => formatIntegerMoney(option.franchise),
-    },
-    {
-      label: 'Cobertura',
-      icon: ShieldCheck,
-      value: (option: QuoteOptionSummary) => option.coverage.coverageType,
-    },
-    {
-      label: 'Percentual FIPE',
-      icon: Star,
-      value: (option: QuoteOptionSummary) =>
-        option.coverage.fipePercentage ? `${option.coverage.fipePercentage}% FIPE` : 'A validar',
-    },
-    {
-      label: 'Danos materiais',
-      icon: FileText,
-      value: (option: QuoteOptionSummary) => formatIntegerMoney(option.coverage.materialDamage),
-    },
-    {
-      label: 'Danos corporais',
-      icon: FileText,
-      value: (option: QuoteOptionSummary) => formatIntegerMoney(option.coverage.bodyInjuries),
-    },
-    {
-      label: 'Assistência',
-      icon: Wrench,
-      value: (option: QuoteOptionSummary) => option.coverage.assistance,
-    },
-    {
-      label: 'Vidros',
-      icon: ShieldCheck,
-      value: (option: QuoteOptionSummary) => option.coverage.glass,
-    },
-  ];
+interface ComparisonRow {
+  label: string;
+  icon: LucideIcon;
+  value: (option: QuoteOptionSummary) => string;
+}
+
+const ROW_PRICE: ComparisonRow = {
+  label: 'Preço anual',
+  icon: BadgeDollarSign,
+  value: (option) => formatMoney(option.annualPremium),
+};
+const ROW_COVERAGE: ComparisonRow = {
+  label: 'Cobertura',
+  icon: ShieldCheck,
+  value: (option) => option.coverage.coverageType,
+};
+const ROW_ASSISTANCE: ComparisonRow = {
+  label: 'Assistência',
+  icon: Wrench,
+  value: (option) => option.coverage.assistance,
+};
+const ROW_GLASS: ComparisonRow = {
+  label: 'Vidros',
+  icon: ShieldCheck,
+  value: (option) => option.coverage.glass,
+};
+
+const VEHICLE_ROWS: ComparisonRow[] = [
+  ROW_PRICE,
+  {
+    label: 'Franquia geral',
+    icon: Wrench,
+    value: (option) => formatIntegerMoney(option.franchise),
+  },
+  ROW_COVERAGE,
+  {
+    label: 'Percentual FIPE',
+    icon: Star,
+    value: (option) => (option.coverage.fipePercentage ? `${option.coverage.fipePercentage}% FIPE` : 'A validar'),
+  },
+  {
+    label: 'Danos materiais',
+    icon: FileText,
+    value: (option) => formatIntegerMoney(option.coverage.materialDamage),
+  },
+  {
+    label: 'Danos corporais',
+    icon: FileText,
+    value: (option) => formatIntegerMoney(option.coverage.bodyInjuries),
+  },
+  ROW_ASSISTANCE,
+  ROW_GLASS,
+];
+
+/** Residencial não tem franquia única, FIPE nem RCF por danos — comparar isso seria inventar dado. */
+const PROPERTY_ROWS: ComparisonRow[] = [ROW_PRICE, ROW_COVERAGE, ROW_ASSISTANCE, ROW_GLASS];
+
+function ComparisonTable({ options, residencial }: { options: QuoteOptionSummary[]; residencial: boolean }): JSX.Element {
+  const rows = residencial ? PROPERTY_ROWS : VEHICLE_ROWS;
 
   return (
     <section className="comparison-section" aria-label="Comparativo de coberturas">
@@ -430,7 +489,15 @@ function ComparisonTable({ options }: { options: QuoteOptionSummary[] }): JSX.El
   );
 }
 
-function OptionDetails({ option, agentName }: { option: QuoteOptionSummary; agentName: string }): JSX.Element {
+function OptionDetails({
+  option,
+  agentName,
+  residencial,
+}: {
+  option: QuoteOptionSummary;
+  agentName: string;
+  residencial: boolean;
+}): JSX.Element {
   const attention =
     option.attentionPoints.length > 0 ? (
       <ul className="attention-list">
@@ -457,14 +524,20 @@ function OptionDetails({ option, agentName }: { option: QuoteOptionSummary; agen
           <span>Prêmio anual</span>
           <strong>{formatMoney(option.annualPremium)}</strong>
         </div>
-        <div>
-          <span>Franquia</span>
-          <strong>{formatIntegerMoney(option.franchise)}</strong>
-        </div>
+        {residencial ? null : (
+          <div>
+            <span>Franquia</span>
+            <strong>{formatIntegerMoney(option.franchise)}</strong>
+          </div>
+        )}
         <div>
           <span>Score {agentName}</span>
           <strong>{option.scores.balance}/100</strong>
-          <small className="score-legend">Considera preço, cobertura, franquia e assistência. Acima de 40 já é equilibrado.</small>
+          <small className="score-legend">
+            {residencial
+              ? 'Considera preço, cobertura e assistência. Acima de 40 já é equilibrado.'
+              : 'Considera preço, cobertura, franquia e assistência. Acima de 40 já é equilibrado.'}
+          </small>
         </div>
       </div>
       {coverageLines.length > 0 ? (
@@ -528,7 +601,11 @@ function AdvisorPanel({
           <LockKeyhole size={28} />
           <div>
             <strong>Dados protegidos</strong>
-            <p>Esta sala usa resumo seguro, sem CPF, placa ou credenciais.</p>
+            <p>
+              {isResidencial(summary)
+                ? 'Esta sala usa resumo seguro, sem CPF, endereço completo ou credenciais.'
+                : 'Esta sala usa resumo seguro, sem CPF, placa ou credenciais.'}
+            </p>
           </div>
         </div>
       </section>
@@ -603,11 +680,14 @@ function QuoteRoom({ summary }: { summary: QuoteSummary }): JSX.Element {
     waLink(buildInterestMessage(option, summary.customer, summary));
   const generalWaHref = waLink(buildGeneralMessage(summary.customer, summary));
 
+  const residencial = isResidencial(summary);
   const firstName = summary.customer.firstName?.trim();
   const heroTitle = firstName ? `Olá, ${firstName}! Sua sala ${summary.agentName}` : `Sua sala ${summary.agentName}`;
   const heroSubtitle = firstName
-    ? `Separei as melhores opções pra você com prioridade em ${preferenceLabel(summary.customer.coveragePreference)}.`
-    : 'Confira as melhores opções para o seu perfil.';
+    ? `Separei as melhores opções pra ${residencial ? 'o seu imóvel' : 'você'} com prioridade em ${preferenceLabel(summary.customer.coveragePreference)}.`
+    : residencial
+      ? 'Confira as melhores opções para o seu imóvel.'
+      : 'Confira as melhores opções para o seu perfil.';
 
   return (
     <main className="page-shell">
@@ -628,9 +708,10 @@ function QuoteRoom({ summary }: { summary: QuoteSummary }): JSX.Element {
             selectedOptionId={selectedOptionId}
             onSelect={setSelectedOptionId}
             buildInterestHref={buildInterestHref}
+            residencial={residencial}
           />
-          <ComparisonTable options={primaryOptions} />
-          <OptionDetails option={selectedOption} agentName={summary.agentName} />
+          <ComparisonTable options={primaryOptions} residencial={residencial} />
+          <OptionDetails option={selectedOption} agentName={summary.agentName} residencial={residencial} />
           <AdditionalProducts options={additionalOptions} />
           <p className="quote-disclaimer">{QUOTE_DISCLAIMER}</p>
           <p className="legal-note">

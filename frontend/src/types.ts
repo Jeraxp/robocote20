@@ -68,6 +68,8 @@ export interface QuoteCustomerInfo {
   coveragePreference: CoveragePreference;
 }
 
+export type QuoteRamo = 'auto' | 'moto' | 'caminhao' | 'residencial';
+
 export interface QuoteSummary {
   ok: true;
   source: 'segfy-show-results';
@@ -75,9 +77,12 @@ export interface QuoteSummary {
   quotationId: string;
   /** Nome do agente exibido no Quote Room (semi-white-label por tenant). */
   agentName: string;
+  /** Ausente em resumos antigos = 'auto'. */
+  ramo?: QuoteRamo;
   quoteDate: string | null;
   validUntil: string | null;
   customer: QuoteCustomerInfo;
+  /** Em residencial: label 'Imóvel', brand = tipo (Casa/Apartamento), model = endereço curto. */
   vehicle: {
     label: string;
     brand: string;

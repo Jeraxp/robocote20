@@ -129,7 +129,10 @@ interface AdminWhatsappInstance {
   tenantId: string;
   evolutionInstanceName: string;
   ownerPhone: string | null;
+  cloudPhoneNumberId: string | null;
+  channel: 'cloudapi' | 'evolution';
   status: string;
+  createdAt?: string;
   lastConnectionState: string | null;
   lastQrAt: string | null;
   connectedAt: string | null;
@@ -187,9 +190,9 @@ interface UserForm {
 
 interface WhatsappForm {
   tenantId: string;
-  instanceName: string;
-  ownerPhone: string;
-  createInEvolution: boolean;
+  /** phone_number_id da Graph — chave estável do número (o display muda, o id não). */
+  cloudPhoneNumberId: string;
+  displayPhone: string;
 }
 
 type PanelSection = 'leads' | 'conversas' | 'tenants' | 'users' | 'whatsapp' | 'settings' | 'support';
@@ -1636,13 +1639,9 @@ function WhatsappSection({
   instances,
   loading,
   saving,
-  connectingName,
-  selectedQr,
   error,
   onChange,
   onSubmit,
-  onConnect,
-  onState,
   onRefresh,
 }: {
   admin: AdminMeResponse | null;
@@ -1661,21 +1660,21 @@ function WhatsappSection({
   onRefresh: () => void;
 }): JSX.Element {
   const isSuperadmin = admin?.auth.isSuperadmin ?? false;
-  const update = (key: keyof WhatsappForm, value: string | boolean): void => {
+  const update = (key: keyof WhatsappForm, value: string): void => {
     onChange({ ...values, [key]: value });
   };
-  const qrSrc = selectedQr?.qr.base64?.startsWith('data:')
-    ? selectedQr.qr.base64
-    : selectedQr?.qr.base64
-      ? `data:image/png;base64,${selectedQr.qr.base64}`
-      : null;
+  // Canal oficial é o produto; o legado (QR) só aparece como contagem, sem ação —
+  // zero conversas em 30 dias e nenhuma instância jamais conectou.
+  const oficiais = instances.filter((item) => item.channel === 'cloudapi');
+  const legado = instances.length - oficiais.length;
+  const tenantName = (id: string): string => tenants.find((t) => t.id === id)?.name ?? id;
 
   return (
     <section className="panel-section-page">
       <header className="panel-hero compact">
         <div>
-          <h1>WhatsApp</h1>
-          <p>Conexões Evolution API por corretora, com QR Code gerado dentro do Robocote.</p>
+          <h1>Canal oficial de WhatsApp</h1>
+          <p>Números oficiais por corretora. O agente atende por eles — sem QR, sem celular ligado.</p>
         </div>
         <button type="button" className="panel-refresh" onClick={onRefresh} disabled={loading}>
           <RefreshCw size={17} />
@@ -1686,8 +1685,8 @@ function WhatsappSection({
       <section className="panel-surface admin-create-card">
         <div className="admin-card-header">
           <div>
-            <strong>Nova conexão</strong>
-            <span>Use para criar uma instância manual ou refazer onboarding de uma corretora.</span>
+            <strong>Cadastrar número oficial</strong>
+            <span>O ID do número vem do cadastro da conta oficial; o telefone é só exibição.</span>
           </div>
         </div>
         <form
@@ -1712,112 +1711,71 @@ function WhatsappSection({
           ) : null}
 
           <label>
-            Instância
+            ID do número
             <input
-              value={values.instanceName}
-              onChange={(event) => update('instanceName', event.target.value)}
-              placeholder="Ex.: robocote-protecta"
+              value={values.cloudPhoneNumberId}
+              onChange={(event) => update('cloudPhoneNumberId', event.target.value.replace(/\D/g, ''))}
+              placeholder="Ex.: 1271003609430710"
+              inputMode="numeric"
+              required
             />
           </label>
 
           <label>
-            Telefone dono
+            Telefone (exibição)
             <input
-              value={values.ownerPhone}
-              onChange={(event) => update('ownerPhone', event.target.value)}
-              placeholder="(11) 99999-9999"
+              value={values.displayPhone}
+              onChange={(event) => update('displayPhone', event.target.value)}
+              placeholder="(48) 99155-9679"
               inputMode="tel"
             />
-          </label>
-
-          <label className="admin-checkbox-field">
-            <input
-              type="checkbox"
-              checked={values.createInEvolution}
-              onChange={(event) => update('createInEvolution', event.target.checked)}
-            />
-            Criar também na Evolution
           </label>
 
           {error ? <p className="manual-lead-error">{error}</p> : null}
 
           <div className="manual-lead-actions">
-            <button type="submit" className="panel-refresh" disabled={saving}>
+            <button type="submit" className="panel-refresh" disabled={saving || !values.cloudPhoneNumberId}>
               {saving ? <RefreshCw size={17} /> : <Plus size={17} />}
-              Criar conexão
+              Cadastrar número
             </button>
           </div>
         </form>
       </section>
 
-      {selectedQr ? (
-        <section className="panel-surface whatsapp-qr-card">
-          <div>
-            <span>QR Code</span>
-            <h2>{selectedQr.instanceName}</h2>
-            <p>Escaneie no WhatsApp do cliente para conectar a instância.</p>
-            {selectedQr.qr.pairingCode || selectedQr.qr.code ? (
-              <strong>{selectedQr.qr.pairingCode ?? selectedQr.qr.code}</strong>
-            ) : null}
-          </div>
-          {qrSrc ? <img src={qrSrc} alt={`QR Code ${selectedQr.instanceName}`} /> : <QrCode size={86} />}
-        </section>
-      ) : null}
-
       <div className="panel-surface admin-table-card">
         <div className="admin-card-header">
           <div>
-            <strong>Instâncias</strong>
-            <span>{loading ? 'Carregando...' : `${instances.length} cadastrada(s)`}</span>
+            <strong>Números oficiais</strong>
+            <span>{loading ? 'Carregando...' : `${oficiais.length} ativo(s)`}</span>
           </div>
         </div>
         <table className="admin-table">
           <thead>
             <tr>
-              <th>Instância</th>
               <th>Telefone</th>
+              <th>ID do número</th>
+              <th>Corretora</th>
               <th>Status</th>
-              <th>Estado</th>
-              <th>Tenant</th>
-              <th>Ações</th>
             </tr>
           </thead>
           <tbody>
-            {instances.map((item) => (
+            {oficiais.map((item) => (
               <tr key={item.id}>
-                <td>{item.evolutionInstanceName}</td>
-                <td>{item.ownerPhone ?? 'A definir'}</td>
-                <td>{item.status}</td>
-                <td>{item.lastConnectionState ?? 'Sem leitura'}</td>
-                <td>{item.tenantId}</td>
-                <td>
-                  <div className="admin-table-actions">
-                    <button
-                      type="button"
-                      className="admin-icon-button"
-                      onClick={() => onConnect(item.evolutionInstanceName)}
-                      disabled={connectingName === item.evolutionInstanceName}
-                      title="Gerar QR Code"
-                    >
-                      {connectingName === item.evolutionInstanceName ? <RefreshCw size={15} /> : <QrCode size={15} />}
-                    </button>
-                    <button
-                      type="button"
-                      className="admin-icon-button"
-                      onClick={() => onState(item.evolutionInstanceName)}
-                      disabled={connectingName === item.evolutionInstanceName}
-                      title="Atualizar estado"
-                    >
-                      <RefreshCw size={15} />
-                    </button>
-                  </div>
-                </td>
+                <td>{item.ownerPhone ?? '—'}</td>
+                <td><code>{item.cloudPhoneNumberId}</code></td>
+                <td>{tenantName(item.tenantId)}</td>
+                <td><span className="panel-status is-quoted">Ativo</span></td>
               </tr>
             ))}
           </tbody>
         </table>
-        {!loading && instances.length === 0 ? (
-          <p className="admin-empty">Nenhum WhatsApp conectado ainda. A fundação de QR já está no backend.</p>
+        {!loading && oficiais.length === 0 ? (
+          <p className="admin-empty">Nenhum número oficial cadastrado ainda.</p>
+        ) : null}
+        {legado > 0 ? (
+          <p className="admin-empty">
+            {legado} conexão(ões) antiga(s) por QR desativada(s) — o canal não oficial foi descontinuado.
+          </p>
         ) : null}
       </div>
     </section>
@@ -2205,9 +2163,8 @@ export function Panel(): JSX.Element {
   const [whatsappQr, setWhatsappQr] = useState<{ instanceName: string; qr: EvolutionQrResult } | null>(null);
   const [whatsappForm, setWhatsappForm] = useState<WhatsappForm>({
     tenantId: '',
-    instanceName: '',
-    ownerPhone: '',
-    createInEvolution: true,
+    cloudPhoneNumberId: '',
+    displayPhone: '',
   });
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [manualOpen, setManualOpen] = useState(false);
@@ -2458,9 +2415,8 @@ export function Panel(): JSX.Element {
       setWhatsappInstances((current) => [created, ...current.filter((item) => item.id !== created.id)]);
       setWhatsappForm((current) => ({
         tenantId: current.tenantId,
-        instanceName: '',
-        ownerPhone: '',
-        createInEvolution: true,
+        cloudPhoneNumberId: '',
+        displayPhone: '',
       }));
       await refreshWhatsapp();
     } catch (e) {

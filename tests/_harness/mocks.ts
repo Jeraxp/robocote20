@@ -44,6 +44,10 @@ export interface Ctrl {
   ramos: string[];
   /** true = getTenantActiveRamos lança (simula tenant sem config). */
   ramosThrows: boolean;
+  /** Endereço devolvido pelo lookup de CEP (null = não achou). */
+  cepResult: { street: string; neighborhood: string; city: string; state: string; streetType?: string } | null;
+  /** Último request que chegou no runner residencial (prova do que a jornada mandou). */
+  residencialQuoteRequest: unknown;
   /** Itens devolvidos pelo catálogo. */
   catalog: unknown[];
   /** true = wasMessageSentByBot devolve true (eco do próprio bot). */
@@ -72,6 +76,8 @@ export function createCtrl(): Ctrl {
     quoteResult: null,
     ramos: ['auto'],
     ramosThrows: false,
+    cepResult: null,
+    residencialQuoteRequest: null,
     catalog: [],
     isBotEcho: false,
     sendFails: false,
@@ -135,8 +141,23 @@ export function installMocks(ctrl: Ctrl, opts: InstallOptions = {}): void {
   // D5 — jornada de cotação (puxa socket.io real se não for mockada).
   m('../../src/journey/autoF1.js', {
     REAL_MODE: 'real',
+    DEFAULT_QUOTE_TIMEOUT_MS: 45000,
+    MAX_QUOTE_TIMEOUT_MS: 90000,
     buildAutoF1Payload: () => ({}),
     autoF1QuoteRequestSchema: { parse: (v: unknown) => v },
+    // Helpers puras que a runner residencial importa — dublês inertes; a runner
+    // residencial também é dublada abaixo, então nada disto roda nos turnos.
+    dateInSaoPaulo: () => '2026-01-01',
+    normalizeDigits: (v: string) => v.replace(/\D/g, ''),
+    normalizeDate: (v: string) => v,
+    normalizeSex: () => 'male',
+    normalizeRenewal: () => ({ insurer: 'new' }),
+    buildReference: () => 'robocote-teste',
+    eventCounts: () => ({ total: 0, result: 0, pdf: 0, step: 0, timedOut: false }),
+    wait: async () => undefined,
+    waitForResultWindow: async () => false,
+    extractGuid: () => 'GUID-TESTE',
+    calculateStatus: () => 'OK',
     runAutoF1Quote: async (payload: unknown) => {
       ctrl.quotePayload = payload;
       if (ctrl.quoteMode === 'fail') throw new Error('mock_cotacao_falhou');
@@ -167,6 +188,34 @@ export function installMocks(ctrl: Ctrl, opts: InstallOptions = {}): void {
     getTenantCoverageForRamo: async () => ({}),
     getTenantCoverageResidencial: async () => ({}),
     getTenantSeguradoras: async () => [],
+  });
+
+  // D6b — lookup de CEP (jornada residencial). null = não achou; a jornada pergunta o endereço.
+  m('../../src/segfy/cep.js', {
+    SEGFY_STREET_TYPES: new Set(['street', 'avenue', 'others']),
+    splitStreetType: (logradouro: string) => ({ streetType: 'others', street: logradouro }),
+    normalizeUf: (v: string) => v.trim().toUpperCase().slice(0, 2),
+    parseCepResponse: () => null,
+    lookupCep: async () => ctrl.cepResult,
+  });
+
+  // D6c — runner residencial: captura o request; devolve o mesmo shape do auto.
+  m('../../src/journey/residencialF1.js', {
+    parseMoney: (v: string) => Number(v.replace(/\D/g, '')) || 0,
+    deriveSum: () => 'building_content',
+    buildResidencialPayload: () => ({}),
+    runResidencialQuote: async (request: unknown) => {
+      ctrl.residencialQuoteRequest = request;
+      if (ctrl.quoteMode === 'fail') throw new Error('mock_cotacao_falhou');
+      return ctrl.quoteResult ?? {
+        guid: 'GUID-RES-TESTE',
+        callbackId: 'CB-TESTE',
+        ramo: 'residencial',
+        quoteSummary: { options: [] },
+        events: [],
+        elapsedMs: 10,
+      };
+    },
   });
 
   // D7 — catálogo. `stepNeedsCatalog` é exigido por assistant/autoF1.ts (transitivo).

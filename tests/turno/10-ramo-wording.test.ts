@@ -56,7 +56,8 @@ test('ramoFromAnswers: sem escolha é auto; escolha cravada vence', () => {
   assert.equal(ramoFromAnswers(undefined), 'auto');
   assert.equal(ramoFromAnswers({ insurance_branch: { rawValue: 'moto' } }), 'moto');
   assert.equal(ramoFromAnswers({ insurance_branch: { rawValue: 'caminhao' } }), 'caminhao');
-  assert.equal(ramoFromAnswers({ insurance_branch: { rawValue: 'residencial' } }), 'auto', 'ramo desconhecido não quebra');
+  assert.equal(ramoFromAnswers({ insurance_branch: { rawValue: 'residencial' } }), 'residencial');
+  assert.equal(ramoFromAnswers({ insurance_branch: { rawValue: 'vida' } }), 'auto', 'ramo sem jornada não quebra');
 });
 
 // ─── integração: a conversa de moto fala moto ────────────────────────────────

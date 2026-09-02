@@ -13,8 +13,8 @@ import {
   type VehicleRamo,
 } from '../tenant/quoteConfig.js';
 
-const DEFAULT_QUOTE_TIMEOUT_MS = 45000;
-const MAX_QUOTE_TIMEOUT_MS = 90000;
+export const DEFAULT_QUOTE_TIMEOUT_MS = 45000;
+export const MAX_QUOTE_TIMEOUT_MS = 90000;
 // Quando 1 seguradora responde rápido com exception e as outras demoram, 4s era
 // curto demais e desconectava antes das demais retornarem. Subido pra 15s.
 const RESULT_IDLE_MS = 15000;
@@ -83,7 +83,14 @@ export interface AutoF1QuoteRun {
   socketConnectedBeforeCalculate: true;
   calculateStatus: string;
   mode: string;
-  vehicleProfile: 'catalog_fipe';
+  /** 'none' quando o ramo não tem veículo (residencial). */
+  vehicleProfile: 'catalog_fipe' | 'none';
+  /**
+   * Ramo da jornada que gerou a cotação. Estruturalmente igual ao JourneyRamo
+   * de core/conversation/steps — declarado inline pra journey/ não depender do
+   * núcleo. Ausente = 'auto' (runs anteriores a este campo).
+   */
+  ramo?: VehicleRamo | 'residencial';
   events: {
     total: number;
     result: number;
@@ -94,7 +101,7 @@ export interface AutoF1QuoteRun {
   elapsedMs: number;
 }
 
-function dateInSaoPaulo(offsetYears = 0, offsetDays = 0): string {
+export function dateInSaoPaulo(offsetYears = 0, offsetDays = 0): string {
   const now = new Date();
   const date = new Date(Date.UTC(now.getUTCFullYear() + offsetYears, now.getUTCMonth(), now.getUTCDate() + offsetDays, 12));
   return new Intl.DateTimeFormat('en-CA', {
@@ -105,11 +112,11 @@ function dateInSaoPaulo(offsetYears = 0, offsetDays = 0): string {
   }).format(date);
 }
 
-function normalizeDigits(value: string): string {
+export function normalizeDigits(value: string): string {
   return value.replace(/\D/g, '');
 }
 
-function normalizeDate(value: string): string {
+export function normalizeDate(value: string): string {
   const trimmed = value.trim();
   const isoMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
   if (isoMatch) return trimmed;
@@ -124,7 +131,7 @@ function normalizeDate(value: string): string {
   return trimmed;
 }
 
-function normalizeSex(value: string): 'male' | 'female' {
+export function normalizeSex(value: string): 'male' | 'female' {
   return value.toLowerCase().startsWith('f') ? 'female' : 'male';
 }
 
@@ -154,7 +161,7 @@ function isRenewalStatus(value: string): boolean {
  *   Os placeholders permitem o calculate passar; a seguradora pode aceitar ou
  *   rejeitar essa cotação na ponta dela, mas o pipeline não trava.
  */
-function normalizeRenewal(statusValue: string, bonusValue: string): {
+export function normalizeRenewal(statusValue: string, bonusValue: string): {
   insurer: string;
   bonus_current?: string;
   prior_policy?: string;
@@ -252,8 +259,9 @@ function usageQuestionnaire(
   };
 }
 
-function buildReference(): string {
-  return `robocote-f1-${dateInSaoPaulo()}-${randomUUID().slice(0, 8)}`;
+/** Referência externa da cotação. O prefixo identifica a jornada nos dumps e na Segfy. */
+export function buildReference(journey = 'f1'): string {
+  return `robocote-${journey}-${dateInSaoPaulo()}-${randomUUID().slice(0, 8)}`;
 }
 
 interface ResolvedVehicleProfile {
@@ -420,7 +428,7 @@ function eventAction(event: SocketEvent): string {
   return String(event.action ?? event.status ?? '').toUpperCase();
 }
 
-function eventCounts(events: SocketEvent[]): AutoF1QuoteRun['events'] {
+export function eventCounts(events: SocketEvent[]): AutoF1QuoteRun['events'] {
   return {
     total: events.length,
     result: events.filter((event) => eventAction(event) === 'RESULT').length,
@@ -430,11 +438,12 @@ function eventCounts(events: SocketEvent[]): AutoF1QuoteRun['events'] {
   };
 }
 
-function wait(ms: number): Promise<void> {
+export function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForResultWindow(session: SocketSession, timeoutMs: number): Promise<boolean> {
+/** Espera a janela de resultados no socket. Devolve true quando estourou o timeout. */
+export async function waitForResultWindow(session: SocketSession, timeoutMs: number): Promise<boolean> {
   const startedAt = Date.now();
   let lastEventCount = session.events.length;
   let lastEventAt = Date.now();
@@ -491,7 +500,7 @@ function collectCompanies(events: SocketEvent[], action: 'STEP' | 'RESULT'): Set
   return set;
 }
 
-function extractGuid(result: CalcularResult): string {
+export function extractGuid(result: CalcularResult): string {
   const body = result.response.body;
   if (body && typeof body === 'object' && 'guid' in body && typeof body.guid === 'string' && body.guid) {
     return body.guid;
@@ -504,7 +513,7 @@ function extractGuid(result: CalcularResult): string {
   throw new Error('A Segfy respondeu o calculate, mas não devolveu GUID da cotação.');
 }
 
-function calculateStatus(result: CalcularResult): string {
+export function calculateStatus(result: CalcularResult): string {
   const body = result.response.body;
   if (body && typeof body === 'object' && 'status' in body) {
     return String(body.status ?? 'unknown');
@@ -591,6 +600,7 @@ export async function runAutoF1Quote(
       calculateStatus: calculateStatus(calculate),
       mode: request.answers.mode,
       vehicleProfile,
+      ramo,
       events: {
         ...counts,
         timedOut,

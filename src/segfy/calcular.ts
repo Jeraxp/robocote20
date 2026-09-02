@@ -16,6 +16,17 @@ import { segfyPOST, type SegfyResponse } from './client.js';
  */
 export type CalcularPayload = Record<string, unknown>;
 
+/**
+ * Ramos da API Segfy que compartilham a mesma mecânica calculate → socket →
+ * show-results. O path muda, o envelope (config.token, callback, guid) não.
+ */
+export type SegfyRamo = 'vehicle' | 'residence';
+
+/** Path versionado de um recurso do ramo: `/api/<ramo>/version/1.0/<recurso>`. */
+export function segfyRamoPath(ramo: SegfyRamo, resource: string): string {
+  return `/api/${ramo}/version/1.0/${resource}`;
+}
+
 export interface CalcularResponse {
   id?: number | string;
   status?: string;
@@ -32,7 +43,11 @@ export function createCallbackId(): string {
   return randomUUID();
 }
 
-export async function postCalcular(payload: CalcularPayload, callbackId = createCallbackId()): Promise<CalcularResult> {
+export async function postCalcular(
+  payload: CalcularPayload,
+  callbackId = createCallbackId(),
+  ramo: SegfyRamo = 'vehicle',
+): Promise<CalcularResult> {
   const fullPayload = {
     ...payload,
     config: {
@@ -40,10 +55,12 @@ export async function postCalcular(payload: CalcularPayload, callbackId = create
       callback: callbackId,
     },
   };
+  // Nome do dump do vehicle fica como sempre foi; só os outros ramos ganham prefixo.
+  const logPrefix = ramo === 'vehicle' ? 'calcular' : `calcular_${ramo}`;
   const response = await segfyPOST<CalcularResponse>(
-    '/api/vehicle/version/1.0/calculate',
+    segfyRamoPath(ramo, 'calculate'),
     fullPayload,
-    `calcular_${callbackId.slice(0, 8)}`,
+    `${logPrefix}_${callbackId.slice(0, 8)}`,
     'body_config_token',
   );
   return { response, callbackId };

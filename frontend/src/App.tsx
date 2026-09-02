@@ -154,7 +154,10 @@ function findOption(summary: QuoteSummary, optionId: string): QuoteOptionSummary
 }
 
 async function fetchQuoteSummary(guid: string): Promise<QuoteSummary> {
-  const response = await fetch(`/api/cotacoes/${encodeURIComponent(guid)}/resumo`);
+  // O ramo vem na URL da sala: o servidor perde o contexto em memória no deploy.
+  const ramo = new URLSearchParams(window.location.search).get('ramo');
+  const query = ramo ? `?ramo=${encodeURIComponent(ramo)}` : '';
+  const response = await fetch(`/api/cotacoes/${encodeURIComponent(guid)}/resumo${query}`);
   const body = (await response.json()) as QuoteSummary | { ok: false; error?: string };
   if (!response.ok || body.ok !== true) {
     throw new Error('error' in body && body.error ? body.error : 'Não foi possível carregar a cotação.');

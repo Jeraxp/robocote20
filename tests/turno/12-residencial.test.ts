@@ -105,6 +105,7 @@ test('jornada inteira até o cálculo: o motor residencial recebe os valores cru
     'sim',             // res_owner
     'sim',             // res_new
     'novo',            // renewal_status
+    '48999998888',     // contact
     'masculino',       // driver_sex
     '12345678909',     // document
   ];
@@ -123,6 +124,35 @@ test('jornada inteira até o cálculo: o motor residencial recebe os valores cru
   assert.equal(req.answers.res_number, '100');
   assert.equal(req.answers.document, '12345678909');
   assert.match(calc.replySent ?? '', /Cotação pronta|detalhes/i);
+  assert.match(calc.replySent ?? '', /\/quote-room\/GUID-RES-TESTE\?ramo=residencial/, 'o ramo viaja na URL da sala — o cache morre no deploy');
+});
+
+test('CEP geral de município (sem rua): confirma só cidade/UF e pergunta a rua', async () => {
+  const p = phone(158);
+  await ateMenu(p);
+  await processWhatsappTurn(inbound('2', { fromPhone: p }));
+  await processWhatsappTurn(inbound('Jera Souto', { fromPhone: p }));
+  ctrl.cepResult = { street: '', neighborhood: '', city: 'Lages', state: 'SC' };
+
+  const r = await processWhatsappTurn(inbound('88500000', { fromPhone: p }));
+
+  assert.match(r.replySent ?? '', /Achei o endereço: Lages\/SC\./, 'sem vírgula solta, sem travessão pendurado');
+  assert.equal(r.sessionAfter?.stepId, 'res_street');
+});
+
+test('sem contato explícito, o WhatsApp da conversa vira o contato do payload', async () => {
+  const p = phone(159);
+  await ateMenu(p);
+  await processWhatsappTurn(inbound('2', { fromPhone: p }));
+  // Semeia a sessão direto no fim da jornada: só o cálculo importa aqui.
+  const { sessionStore } = await import('../../src/session/store.js');
+  const key = { tenantId: 'test', channel: 'whatsapp' as const, channelUserId: p };
+  const s = await sessionStore.get(key);
+  assert.ok(s);
+  await sessionStore.upsert({ ...s, stepId: 'quote_link' });
+  await processWhatsappTurn(inbound('pode', { fromPhone: p }));
+  const req = ctrl.residencialQuoteRequest as { answers: Record<string, string> } | null;
+  assert.equal(req?.answers.contact, p);
 });
 
 test('cotação de auto continua saindo pelo motor de veículo — nada vazou entre ramos', async () => {

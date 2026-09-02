@@ -51,7 +51,7 @@ import { sendWhatsappText } from '../channels/whatsapp/transport.js';
 import { clearWhatsappAccountCache } from '../tenant/whatsappAccount.js';
 import { WhatsappNumberTakenError } from '../admin/store.js';
 import { buildRecapMessage, SERVICE_TYPE_QUESTION } from '../core/conversation/language.js';
-import { STEP_PROMPT, applyRamoWording, ramoFromAnswers, type StepId } from '../core/conversation/steps.js';
+import { STEP_PROMPT, RESIDENCIAL_STEP_ORDER, applyRamoWording, ramoFromAnswers, type StepId } from '../core/conversation/steps.js';
 
 export const api = new Hono();
 
@@ -338,6 +338,26 @@ const PANEL_LABELS: Record<string, string> = {
   driver_sex: 'Sexo',
   document: 'CPF',
   quote_link: 'Cotação',
+  // Residencial
+  res_zip: 'CEP do imóvel',
+  res_street: 'Rua',
+  res_neighborhood: 'Bairro',
+  res_city: 'Cidade',
+  res_state: 'UF',
+  res_street_type: 'Tipo de logradouro',
+  res_number: 'Número',
+  res_complement: 'Complemento',
+  res_segment: 'Tipo de imóvel',
+  res_construction: 'Construção',
+  res_residence_type: 'Uso do imóvel',
+  res_building_value: 'Valor da construção',
+  res_content_value: 'Valor do conteúdo',
+  res_condominium: 'Condomínio fechado',
+  res_alarm: 'Alarme',
+  res_grills: 'Grades nas janelas',
+  res_countryside: 'Zona rural',
+  res_owner: 'Proprietário',
+  res_new: 'Reposição a novo',
 };
 
 const PIPELINE_STAGES: Array<{ key: PipelineStage; label: string }> = [
@@ -442,7 +462,10 @@ function manualAnswer(id: string, label: string, value: string): SessionAnswer {
 }
 
 function sanitizeAnswer(answer: SessionAnswer): { id: string; label: string; value: string } {
-  const label = PANEL_LABELS[answer.id] ?? answer.label ?? answer.id;
+  const base = PANEL_LABELS[answer.id] ?? answer.label ?? answer.id;
+  // Procedência visível: o corretor precisa saber o que o lead AFIRMOU e o que a
+  // base respondeu pelo CEP — são coisas diferentes na hora de confirmar o risco.
+  const label = (answer.metadata as { source?: string } | undefined)?.source === 'lookup' ? `${base} (pelo CEP)` : base;
   // Painel/Kanban é a interface do CORRETOR — ele precisa do dado REAL (CPF, telefone, CEP)
   // pra trabalhar o lead. Mascaramento PII fica só na conversa com o cliente. (Jera 2026-06-07)
   // CPF é gravado com value mascarado (657.***.***-90) e rawValue com o CPF real → devolve o real.
@@ -455,10 +478,12 @@ function sanitizeAnswer(answer: SessionAnswer): { id: string; label: string; val
 
 function leadProgress(session: SessionState): number {
   if (session.completed || session.stepId === 'complete') return 100;
-  const index = PANEL_STEP_ORDER.indexOf(session.stepId as (typeof PANEL_STEP_ORDER)[number]);
+  // Cada ramo tem a própria régua — medir residencial pelos steps de veículo dava 0% a jornada inteira.
+  const order: readonly string[] = ramoFromAnswers(session.answers) === 'residencial' ? RESIDENCIAL_STEP_ORDER : PANEL_STEP_ORDER;
+  const index = order.indexOf(session.stepId);
   if (index < 0) return 0;
-  const answeredSteps = PANEL_STEP_ORDER.filter((step) => Boolean(session.answers[step])).length;
-  return Math.round((answeredSteps / PANEL_STEP_ORDER.length) * 100);
+  const answeredSteps = order.filter((step) => Boolean(session.answers[step])).length;
+  return Math.round((answeredSteps / order.length) * 100);
 }
 
 function leadStatus(session: SessionState): { key: string; label: string } {
@@ -531,7 +556,9 @@ function serializeLead(session: SessionState) {
     vehicle: sessionVehicle(session),
     coveragePreference: session.coveragePreference,
     quoteGuid: session.lastGuid,
-    quoteRoomPath: session.lastGuid ? `/quote-room/${session.lastGuid}` : null,
+    quoteRoomPath: session.lastGuid
+      ? `/quote-room/${session.lastGuid}${ramoFromAnswers(session.answers) === 'residencial' ? '?ramo=residencial' : ''}`
+      : null,
     createdAt: new Date(session.createdAt).toISOString(),
     updatedAt: new Date(session.updatedAt).toISOString(),
     // Detector: o lead chegou por uma conta de canal não cadastrada — o sistema
@@ -865,7 +892,8 @@ api.get('/admin/whatsapp-instances', async (c) => {
   if (!canManageWhatsapp(auth)) {
     return c.json({ ok: false, error: 'usuário sem permissão para gerenciar WhatsApp' }, 403);
   }
-  const tenantId = c.req.query('tenantId') || auth.tenantId || undefined;
+  // Só superadmin escolhe corretora pela query — admin de A não lista os números de B.
+  const tenantId = auth.isSuperadmin ? (c.req.query('tenantId') || undefined) : (auth.tenantId ?? undefined);
   return c.json({ ok: true, instances: await adminStore.listWhatsappInstances(auth, tenantId) });
 });
 
@@ -1000,8 +1028,11 @@ api.get('/cotacoes/:guid/resumo', async (c) => {
   try {
     const ctx = readQuoteContext(guid);
     const agentName = await getAgentName(ctx?.tenantId ?? '');
-    // Sem contexto (cache expirou/reiniciou) cai em 'auto' — o ramo persistido é dívida da F4 (quote_meta).
-    const summary = await getQuoteSummary(guid, ctx?.info, agentName, ctx?.ramo);
+    // Cache em memória morre no deploy; o ramo também viaja na URL da sala (turn.ts).
+    const ramoUrl = c.req.query('ramo');
+    const ramo = ctx?.ramo
+      ?? (ramoUrl === 'residencial' || ramoUrl === 'moto' || ramoUrl === 'caminhao' ? ramoUrl : undefined);
+    const summary = await getQuoteSummary(guid, ctx?.info, agentName, ramo);
     return c.json(summary);
   } catch (e) {
     return c.json(

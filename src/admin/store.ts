@@ -340,8 +340,15 @@ export class InMemoryAdminStore implements AdminStore {
     const now = new Date().toISOString();
     const existing = [...this.whatsapp.values()].find((item) => item.evolutionInstanceName === input.evolutionInstanceName);
     if (existing) return existing;
-    if (input.cloudPhoneNumberId && [...this.whatsapp.values()].some((item) => item.cloudPhoneNumberId === input.cloudPhoneNumberId)) {
-      throw new WhatsappNumberTakenError(input.cloudPhoneNumberId);
+    if (input.cloudPhoneNumberId) {
+      const dono = [...this.whatsapp.values()].find((item) => item.cloudPhoneNumberId === input.cloudPhoneNumberId);
+      if (dono && dono.tenantId !== input.tenantId) throw new WhatsappNumberTakenError(input.cloudPhoneNumberId);
+      if (dono) {
+        // Mesma corretora recadastrando o próprio número (ex.: pra ajustar o telefone de exibição).
+        const atualizado = { ...dono, ownerPhone: input.ownerPhone || dono.ownerPhone, status: input.status ?? dono.status, updatedAt: now };
+        this.whatsapp.set(dono.id, atualizado);
+        return atualizado;
+      }
     }
 
     const record: WhatsappInstanceRecord = {
@@ -500,7 +507,9 @@ class PostgresAdminStore implements AdminStore {
 
   async listWhatsappInstances(auth: AuthContext, tenantId?: string): Promise<WhatsappInstanceRecord[]> {
     const pool = getPostgresPool();
-    const target = tenantId ?? auth.tenantId;
+    // Defesa em profundidade: fora do superadmin, o escopo é sempre o da própria corretora.
+    const target = auth.isSuperadmin ? tenantId : (auth.tenantId ?? tenantId);
+    if (!auth.isSuperadmin && !target) return [];
     const result = auth.isSuperadmin && !target
       ? await pool.query('select * from whatsapp_instances order by updated_at desc')
       : await pool.query('select * from whatsapp_instances where tenant_id = $1 order by updated_at desc', [target]);
@@ -515,6 +524,26 @@ class PostgresAdminStore implements AdminStore {
     status?: WhatsappInstanceRecord['status'];
   }): Promise<WhatsappInstanceRecord> {
     const pool = getPostgresPool();
+    if (input.cloudPhoneNumberId) {
+      // Quem já é dono do número? Mesma corretora atualiza; outra corretora leva 409.
+      const dono = await pool.query(
+        'select tenant_id from whatsapp_instances where cloud_phone_number_id = $1 limit 1',
+        [input.cloudPhoneNumberId],
+      );
+      const donoTenant = dono.rows[0]?.tenant_id as string | undefined;
+      if (donoTenant && donoTenant !== input.tenantId) throw new WhatsappNumberTakenError(input.cloudPhoneNumberId);
+      if (donoTenant) {
+        const atualizado = await pool.query(`
+          update whatsapp_instances set
+            owner_phone = coalesce($2, owner_phone),
+            status = coalesce($3, status),
+            updated_at = now()
+          where cloud_phone_number_id = $1
+          returning *
+        `, [input.cloudPhoneNumberId, input.ownerPhone || null, input.status ?? null]);
+        return rowWhatsapp(atualizado.rows[0]);
+      }
+    }
     try {
       const result = await pool.query(`
         insert into whatsapp_instances (id, tenant_id, evolution_instance_name, owner_phone, status, cloud_phone_number_id)

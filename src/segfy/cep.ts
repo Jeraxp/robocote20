@@ -164,8 +164,11 @@ export function parseCepResponse(body: unknown): EnderecoCep | null {
 
   if (explicitType && SEGFY_STREET_TYPES.has(explicitType)) {
     result.streetType = explicitType;
+    // "Rua Felipe Schmidt" + type 'street' → street sem o "Rua": o tipo não pode ir duas vezes.
+    if (logradouro) result.street = splitStreetType(logradouro).street;
   } else if (explicitType && STREET_TYPE_BY_PREFIX[explicitType]) {
     result.streetType = STREET_TYPE_BY_PREFIX[explicitType];
+    if (logradouro) result.street = splitStreetType(logradouro).street;
   } else if (logradouro) {
     const split = splitStreetType(logradouro);
     result.streetType = split.streetType;

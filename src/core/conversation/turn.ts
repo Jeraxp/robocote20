@@ -156,9 +156,15 @@ function addressAnswersFromLookup(cep: EnderecoCep): AnswerMap {
   return out;
 }
 
-function buildQuoteLink(guid: string): string {
-  if (!ROBOCOTE_QUOTE_BASE_URL) return `/quote-room/${guid}`;
-  return `${ROBOCOTE_QUOTE_BASE_URL.replace(/\/$/, '')}/quote-room/${guid}`;
+/**
+ * O ramo viaja NA URL: o contexto da cotação vive em memória (TTL 24h) e morre no
+ * primeiro deploy — sem isso, a sala residencial abriria pelo motor de veículo e
+ * o lead receberia um link morto. Auto continua limpo (é o default).
+ */
+function buildQuoteLink(guid: string, ramo: JourneyRamo = 'auto'): string {
+  const sufixo = ramo === 'auto' ? '' : `?ramo=${ramo}`;
+  if (!ROBOCOTE_QUOTE_BASE_URL) return `/quote-room/${guid}${sufixo}`;
+  return `${ROBOCOTE_QUOTE_BASE_URL.replace(/\/$/, '')}/quote-room/${guid}${sufixo}`;
 }
 
 function recordInbound(
@@ -258,6 +264,9 @@ function rawAnswersFromSession(session: SessionState): Record<string, string> {
   for (const [key, answer] of Object.entries(session.answers)) {
     out[key] = answer.rawValue ?? answer.value ?? '';
   }
+  // No WhatsApp o contato É o número da conversa — a seguradora e o corretor
+  // recebem um telefone mesmo que o lead não tenha repetido o próprio número.
+  if (!out.contact && session.channel === 'whatsapp') out.contact = session.channelUserId;
   return out;
 }
 
@@ -281,7 +290,7 @@ async function triggerCalculate(
       session.tenantId,
       ramo,
     );
-    const link = buildQuoteLink(result.guid);
+    const link = buildQuoteLink(result.guid, ramo);
     const top = result.quoteSummary.options
       .filter((o) => o.category === 'principal')
       .slice(0, 3)
@@ -755,7 +764,7 @@ export async function runConversationTurn(
   if (session.stepId === 'quote_link' && isCalcConfirmation(inbound.text)) {
     // ─── P2 — Idempotência: se já calculou nos últimos 60s, reenvia o link existente ──
     if (session.lastGuid && session.lastCalculateAt && Date.now() - session.lastCalculateAt < CALCULATE_IDEMPOTENCY_MS) {
-      const link = buildQuoteLink(session.lastGuid);
+      const link = buildQuoteLink(session.lastGuid, ramoFromAnswers(session.answers));
       const reply = `Sua cotação ainda tá fresca aqui — pode abrir:\n${link}`;
       await deps.send(reply);
       const persisted = await sessionStore.upsert(recordTurn(session, inbound, reply, 'none', session.lastGuid));
@@ -858,8 +867,11 @@ export async function runConversationTurn(
         if (cep) {
           const answers = { ...nextSession.answers, ...addressAnswersFromLookup(cep) };
           nextSession = { ...nextSession, answers, stepId: nextStepAfter('res_zip', answers) };
+          // Só as partes que existem: CEP geral de município vem sem rua/bairro.
           const cidadeUf = [cep.city, cep.state.toUpperCase()].filter(Boolean).join('/');
-          ack = `Achei o endereço: ${streetDisplay(cep)}${cep.neighborhood ? `, ${cep.neighborhood}` : ''}${cidadeUf ? ` — ${cidadeUf}` : ''}.`;
+          const partes = [streetDisplay(cep), cep.neighborhood].map((p) => p?.trim()).filter(Boolean);
+          const lugar = [partes.join(', '), cidadeUf].filter(Boolean).join(' — ');
+          ack = lugar ? `Achei o endereço: ${lugar}.` : result.reply;
         }
       }
 

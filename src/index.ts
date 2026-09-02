@@ -19,8 +19,11 @@ app.get('/webchat', (c) => c.redirect('/public/quote-room/index.html?mode=webcha
 app.get('/teste', (c) => c.redirect('/public/teste/index.html'));
 app.get('/painel', (c) => c.redirect('/public/quote-room/index.html?mode=painel'));
 app.get('/quote-room', (c) => c.redirect('/public/quote-room/index.html'));
-app.get('/quote-room/:guid', (c) =>
-  c.redirect(`/public/quote-room/index.html?guid=${encodeURIComponent(c.req.param('guid'))}`),
+app.get('/quote-room/:guid', (c) => {
+  const ramo = c.req.query('ramo');
+  const extra = ramo ? `&ramo=${encodeURIComponent(ramo)}` : '';
+  return c.redirect(`/public/quote-room/index.html?guid=${encodeURIComponent(c.req.param('guid'))}${extra}`);
+},
 );
 
 app.get('/health', (c) => {

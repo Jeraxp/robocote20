@@ -419,7 +419,23 @@ function extractMoney(value: string): string | null {
 }
 
 function formatMoney(digits: string): string {
+  if (digits === '0') return 'Sem valor (não segurar)';
   return `R$ ${Number(digits).toLocaleString('pt-BR')}`;
+}
+
+/**
+ * "Não tenho", "zero", "só o conteúdo": o inquilino não segura a construção e o
+ * dono do terreno vazio não segura conteúdo. Sem esta porta o lead ficava em
+ * loop de "me passa um valor" — ou inventava um número que ia pra cotação real.
+ */
+function zeroIntent(value: string): '0' | null {
+  const m = normalize(value).replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!m) return null;
+  if (/^(0|zero)$/.test(m)) return '0';
+  if (/\b(nenhum|nenhuma|nada|zero)\b/.test(m)) return '0';
+  if (/\bnao (tenho|sou|quero|preciso|tem)\b/.test(m)) return '0';
+  if (/\bso (o |a )?(conteudo|construcao|predio|imovel|casa)\b/.test(m)) return '0';
+  return parseYesNo(m) === 'no' ? '0' : null;
 }
 
 const UF_BY_NAME: Record<string, string> = {
@@ -445,9 +461,14 @@ function extractUf(value: string): string | null {
     .filter((name) => new RegExp(`\\b${name}\\b`).test(m))
     .sort((a, b) => b.length - a.length)[0];
   if (hit) return UF_BY_NAME[hit];
-  // Sigla dentro de frase ("é SC", "fica em sp").
-  const token = m.split(' ').map((t) => t.toUpperCase()).find((t) => UF_SIGLAS.has(t));
-  return token ?? null;
+  // Sigla dentro de frase ("é SC", "tô em sp"). Partícula de 2 letras também é
+  // sigla válida ("tô"→TO, "se"→SE, "pa"→PA): quem escreveu em MAIÚSCULA no
+  // original vence; senão vale a ÚLTIMA sigla da frase — o estado vem no fim.
+  const originais = value.replace(/[^A-Za-zÀ-ÿ\s]/g, ' ').split(/\s+/).filter(Boolean);
+  const maiusculas = originais.filter((t) => t.length === 2 && t === t.toUpperCase() && UF_SIGLAS.has(t));
+  if (maiusculas.length) return maiusculas[maiusculas.length - 1];
+  const siglas = m.split(' ').map((t) => t.toUpperCase()).filter((t) => UF_SIGLAS.has(t));
+  return siglas.length ? siglas[siglas.length - 1] : null;
 }
 
 /** Sim/não em linguagem natural. Negação vence quando as duas aparecem ("não, sim tem" é raro; "não tem" é comum). */
@@ -709,9 +730,9 @@ function localRules(request: AssistantRequest): AssistantResponse {
   if (choice) return localAnswer(channel, stepId, choice.value, choice.label, 0.86);
 
   if (RES_MONEY_STEPS.has(stepId)) {
-    const money = extractMoney(raw);
+    const money = extractMoney(raw) ?? zeroIntent(raw);
     if (money) return localAnswer(channel, stepId, money, formatMoney(money), 0.9);
-    return localAsk(channel, stepId, 'Me passa um valor aproximado em reais — pode ser "350 mil" ou "350.000".');
+    return localAsk(channel, stepId, 'Me passa um valor aproximado em reais — pode ser "350 mil" ou "350.000". Se não quiser segurar essa parte, é só dizer "nenhum".');
   }
   if (stepId === 'res_zip') {
     const zip = extractZip(raw);
@@ -1145,9 +1166,27 @@ function proposedAnswerFromRouter(
 
   // Valor em R$: recalcula da mensagem (a IA não normaliza "350 mil" de forma confiável).
   if (RES_MONEY_STEPS.has(stepId)) {
-    const money = extractMoney(request.message) ?? extractMoney(router.value);
+    const money = extractMoney(request.message) ?? extractMoney(router.value) ?? zeroIntent(request.message);
     if (!money) return undefined;
     return { stepId, value: money, displayLabel: formatMoney(money), confidence: router.confidence };
+  }
+
+  // Complemento e número: a IA sob JSON devolve o texto cru — "não tem" viraria
+  // complemento do imóvel. Mesma régua do caminho local.
+  if (stepId === 'res_complement') {
+    if (/^(nao|n|sem|nenhum|nao tem|sem complemento)\b/.test(normalize(request.message))) {
+      return { stepId, value: '', displayLabel: 'Sem complemento', confidence: router.confidence };
+    }
+    const texto = request.message.replace(/\s+/g, ' ').trim().slice(0, 60);
+    return { stepId, value: texto, displayLabel: texto, confidence: router.confidence };
+  }
+  if (stepId === 'res_number') {
+    const num = request.message.replace(/\s+/g, ' ').trim();
+    if (/^(s\/?n|sem numero)$/.test(normalize(num))) {
+      return { stepId, value: 'S/N', displayLabel: 'Sem número', confidence: router.confidence };
+    }
+    if (!/\d/.test(num) || num.length > 12) return undefined;
+    return { stepId, value: num, displayLabel: num, confidence: router.confidence };
   }
 
   if (stepId === 'res_state') {

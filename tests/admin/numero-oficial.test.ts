@@ -41,6 +41,24 @@ test('o mesmo número em outra corretora é recusado — vazamento entre cliente
   );
 });
 
+test('a mesma corretora recadastrando o próprio número atualiza o telefone — sem 409 falso', async () => {
+  const store = new InMemoryAdminStore();
+  const antes = await store.createWhatsappInstance({
+    tenantId: 'robocote',
+    evolutionInstanceName: 'wa-robocote-mostruario', // nome fora da convenção (linha nascida por SQL)
+    cloudPhoneNumberId: '222',
+  });
+  const depois = await store.createWhatsappInstance({
+    tenantId: 'robocote',
+    evolutionInstanceName: 'cloudapi-robocote-222',
+    cloudPhoneNumberId: '222',
+    ownerPhone: '5548991559679',
+    status: 'connected',
+  });
+  assert.equal(depois.id, antes.id, 'é a mesma linha, atualizada');
+  assert.equal(depois.ownerPhone, '5548991559679');
+});
+
 test('instância legada (sem id oficial) continua sendo evolution', async () => {
   const store = new InMemoryAdminStore();
   const r = await store.createWhatsappInstance({

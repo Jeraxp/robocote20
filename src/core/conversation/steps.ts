@@ -120,6 +120,7 @@ export const RESIDENCIAL_STEP_ORDER = [
   'res_new',
   'renewal_status',
   'renewal_bonus',
+  'contact',
   'driver_sex',
   'document',
   'quote_link',

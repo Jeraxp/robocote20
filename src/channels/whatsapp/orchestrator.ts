@@ -28,7 +28,7 @@ import {
   type SessionKey,
 } from '../../session/store.js';
 import type { WhatsappInboundMessage } from './transport.js';
-import { sendWhatsappText, wasMessageSentByBot } from './transport.js';
+import { sendWhatsappText, sendWhatsappMessage, wasMessageSentByBot } from './transport.js';
 import { getAgentName } from '../../tenant/agent.js';
 import { buildGreeting } from '../../core/conversation/language.js';
 import { cacheQuoteContext } from '../../quote/contextCache.js';
@@ -198,7 +198,7 @@ export async function processWhatsappTurn(
       timestamp: inbound.timestamp,
       tenantUnresolved: resolvedTenant.unresolved,
     },
-    { send: (text: string) => sendWhatsappText(inbound.fromPhone, text) },
+    { send: (text: string) => sendWhatsappMessage(inbound.fromPhone, text) },
   );
 }
 

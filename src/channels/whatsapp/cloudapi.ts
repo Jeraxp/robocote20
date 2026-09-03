@@ -55,6 +55,8 @@ export interface CloudApiInboundMessage {
    * Agora o orquestrador responde educadamente — sem avançar a jornada.
    */
   unsupportedType?: string;
+  /** Id da opção tocada (button_reply/list_reply). O `text` leva o título. */
+  interactiveId?: string;
 }
 
 export interface SendTextResult {
@@ -194,6 +196,22 @@ export function parseCloudApiInboundMessages(payload: CloudApiWebhookPayload): C
           messageId: typeof messageRec.id === 'string' ? messageRec.id : undefined,
           timestamp,
         };
+
+        if (kind === 'interactive') {
+          // Toque em botão ou item de lista (contrato v3): o TÍTULO vira a fala —
+          // é o que o motor entende ("Sim", "Casa", "Seguro de Moto") — e o id
+          // segue junto pra rastreio. Sem isso, o toque cairia como "mídia".
+          const inter = asRecord(messageRec.interactive);
+          const reply = asRecord(inter.button_reply ?? inter.list_reply);
+          const title = typeof reply.title === 'string' ? reply.title.trim() : '';
+          if (!title) continue;
+          result.push({
+            ...base,
+            text: title,
+            interactiveId: typeof reply.id === 'string' ? reply.id : undefined,
+          });
+          continue;
+        }
 
         if (kind !== 'text') {
           // Áudio, imagem, documento, figurinha… O lead falou; o motor responde

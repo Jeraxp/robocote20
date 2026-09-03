@@ -145,6 +145,97 @@ async function postMensagem(para: string, texto: string): Promise<SendTextResult
   }
 }
 
+// ─── Interativo (contrato v3, 03/09/2026) ───────────────────────────────────
+
+export type InterativoPayload =
+  | { tipo: 'botoes'; corpo: string; rodape?: string; botoes: Array<{ id: string; titulo: string }> }
+  | { tipo: 'lista'; corpo: string; botao: string; secoes: Array<{ titulo: string; itens: Array<{ id: string; titulo: string; descricao?: string }> }> }
+  | { tipo: 'link'; corpo: string; rotulo: string; url: string };
+
+const CAPACIDADE_TTL_MS = 5 * 60 * 1000;
+let capacidadeCache: { interativo: boolean; ate: number } | null = null;
+
+/** Só para teste — zera a memória de capacidade. */
+export function _limparCapacidade(): void {
+  capacidadeCache = null;
+}
+
+/**
+ * O gateway sabe botão? Pergunta ao GET /capacidades e lembra por 5 min.
+ * Qualquer falha = "não sabe" → a fala sai como texto. Nunca lança.
+ * ROBOCOTE_GATEWAY_INTERATIVO=off desliga na mão; =on força sem perguntar.
+ */
+export async function hasInteractive(): Promise<boolean> {
+  const forcado = process.env.ROBOCOTE_GATEWAY_INTERATIVO?.trim().toLowerCase();
+  if (forcado === 'off') return false;
+  if (forcado === 'on') return true;
+  const agora = Date.now();
+  if (capacidadeCache && capacidadeCache.ate > agora) return capacidadeCache.interativo;
+  const base = baseUrl();
+  const chave = apiKey();
+  if (!base || !chave) return false;
+  let interativo = false;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), Math.min(timeoutMs(), 5000));
+  try {
+    const resp = await fetch(`${base}/api/v1/robocote/capacidades`, {
+      headers: { 'x-motor-api-key': chave },
+      signal: ctrl.signal,
+    });
+    if (resp.ok) {
+      const body = (await resp.json().catch(() => ({}))) as { interativo?: boolean };
+      interativo = body.interativo === true;
+    }
+  } catch {
+    interativo = false;
+  } finally {
+    clearTimeout(timer);
+  }
+  capacidadeCache = { interativo, ate: agora + CAPACIDADE_TTL_MS };
+  return interativo;
+}
+
+/**
+ * Envia uma mensagem interativa. Quem chama decide o que fazer se falhar —
+ * a regra do transporte é cair pro texto, nunca perder a fala.
+ */
+export async function sendWhatsappInteractive(toPhone: string, interativo: InterativoPayload): Promise<SendTextResult> {
+  const para = normalizePhone(toPhone);
+  if (!para) return { ok: false, status: 0, error: 'destino_invalido' };
+  const base = baseUrl();
+  const chave = apiKey();
+  if (!base || !chave) return { ok: false, status: 0, error: 'gateway_nao_configurado' };
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs());
+  try {
+    const resp = await fetch(`${base}/api/v1/robocote/mensagens`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-motor-api-key': chave },
+      body: JSON.stringify({ para, interativo }),
+      signal: ctrl.signal,
+    });
+    const cru = await resp.text();
+    let body: unknown;
+    try {
+      body = cru ? JSON.parse(cru) : undefined;
+    } catch {
+      body = cru;
+    }
+    if (!resp.ok) {
+      const msg = (body as { message?: string } | undefined)?.message;
+      return { ok: false, status: resp.status, body, error: msg || `http_${resp.status}` };
+    }
+    const dados = (body ?? {}) as { enviada?: boolean; meta_message_id?: string };
+    return { ok: dados.enviada !== false, status: resp.status, body, messageId: dados.meta_message_id };
+  } catch (e) {
+    const err = e as Error;
+    return { ok: false, status: 0, error: err.name === 'AbortError' ? 'timeout' : err.message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Envia texto pelo número oficial, via gateway.
  * Texto acima do teto vira várias mensagens, em ordem. Se um pedaço falhar,

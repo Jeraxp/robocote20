@@ -21,6 +21,7 @@
 import * as cloudapi from './cloudapi.js';
 import * as evolution from './evolution.js';
 import * as gateway from './gateway.js';
+import { planejarInterativo } from './interativo.js';
 
 /** Contrato neutro de mensagem inbound — mesmo shape nos dois canais. */
 export interface WhatsappInboundMessage {
@@ -44,6 +45,8 @@ export interface WhatsappInboundMessage {
   channelAccountId?: string;
   /** Tipo da mensagem quando não é texto (audio/image/document…). Só cloudapi/gateway preenchem. */
   unsupportedType?: string;
+  /** Id da opção tocada (botão/lista). O `text` carrega o título — é o que o motor entende. */
+  interactiveId?: string;
 }
 
 export interface SendTextResult {
@@ -77,6 +80,27 @@ export async function sendWhatsappText(toPhone: string, text: string): Promise<S
     default:
       return evolution.sendWhatsappText(toPhone, text);
   }
+}
+
+/**
+ * Fala do motor → WhatsApp. É o que o orquestrador usa para TUDO que o núcleo diz.
+ *
+ * Se o canal é o gateway e ele sabe botão (contrato v3), a fala que tem cara de
+ * pergunta de múltipla escolha, menu numerado ou resultado de cotação vira
+ * mensagem interativa. Qualquer falha nesse caminho (validação, timeout, gateway
+ * antigo) cai pro texto — a fala NUNCA se perde por causa de um botão.
+ * O texto original é o que fica registrado na linha do tempo, sempre.
+ */
+export async function sendWhatsappMessage(toPhone: string, text: string): Promise<SendTextResult> {
+  if (getActiveWhatsappChannel() === 'gateway') {
+    const plano = planejarInterativo(text);
+    if (plano && (await gateway.hasInteractive())) {
+      const enviado = await gateway.sendWhatsappInteractive(toPhone, plano);
+      if (enviado.ok) return enviado;
+      console.warn(`[whatsapp] interativo recusado (${enviado.error ?? `http_${enviado.status}`}) — caindo pro texto`);
+    }
+  }
+  return sendWhatsappText(toPhone, text);
 }
 
 /**

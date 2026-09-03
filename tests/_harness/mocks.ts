@@ -107,6 +107,10 @@ export function installMocks(ctrl: Ctrl, opts: InstallOptions = {}): void {
   // D1 — transporte: captura em vez de enviar.
   m('../../src/channels/whatsapp/transport.js', {
     getActiveWhatsappChannel: () => 'evolution',
+    sendWhatsappMessage: async (to: string, text: string) => {
+      ctrl.sent.push({ to, text });
+      return { ok: true, status: 200 };
+    },
     sendWhatsappText: async (to: string, text: string) => {
       ctrl.sent.push({ to, text });
       ctrl.trail.push(`send:${ctrl.seq++}`);

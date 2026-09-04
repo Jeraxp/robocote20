@@ -81,11 +81,14 @@ interface PanelResponse {
   ok: true;
   auth: PanelAuth;
   metrics: {
+    /** Funil vivo — casa com o que o Kanban mostra; o acervo fica de fora. */
     total: number;
     active: number;
     ready: number;
     quoted: number;
     waiting: number;
+    /** Acervo do legado, fora do funil. Opcional: painel antigo não mandava. */
+    archived?: number;
   };
   leads: PanelLead[];
   ts: string;
@@ -431,16 +434,20 @@ function MetricCard({
   icon: Icon,
   label,
   value,
+  hint,
 }: {
   icon: typeof Activity;
   label: string;
   value: number;
+  /** Explica o recorte quando o número sozinho enganaria. */
+  hint?: string;
 }): JSX.Element {
   return (
     <article className="panel-metric">
       <Icon size={20} />
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong>{value.toLocaleString('pt-BR')}</strong>
+      {hint ? <small className="panel-metric-hint">{hint}</small> : null}
     </article>
   );
 }
@@ -3056,10 +3063,13 @@ export function Panel(): JSX.Element {
             </section>
 
             <section className="panel-metrics" aria-label="Indicadores do atendimento">
-              <MetricCard icon={Activity} label="Leads" value={metrics.total} />
-              <MetricCard icon={MessageCircle} label="Ativos" value={metrics.active} />
-              <MetricCard icon={Clock3} label="Confirmação" value={metrics.waiting} />
-              <MetricCard icon={CheckCircle2} label="Cotados" value={metrics.quoted} />
+              <MetricCard icon={Activity} label="Leads no funil" value={metrics.total} hint="tudo que está no Kanban" />
+              <MetricCard icon={MessageCircle} label="Ativos" value={metrics.active} hint="conversa em andamento" />
+              <MetricCard icon={Clock3} label="Confirmação" value={metrics.waiting} hint="esperando o lead confirmar" />
+              <MetricCard icon={CheckCircle2} label="Cotados" value={metrics.quoted} hint="cotação entregue" />
+              {typeof metrics.archived === 'number' && metrics.archived > 0 ? (
+                <MetricCard icon={Clock3} label="Acervo" value={metrics.archived} hint="base antiga, fora do funil" />
+              ) : null}
             </section>
 
             <section className="panel-kanban-shell">

@@ -189,6 +189,33 @@ export interface SessionKey {
   channelUserId: string;
 }
 
+/**
+ * Números do topo do painel. Contados sobre a base INTEIRA da corretora, nunca
+ * sobre a janela carregada — o painel traz 500 leads por vez e "Leads: 500"
+ * era o teto da janela se passando por total.
+ *
+ * O acervo do legado fica separado: são 42 mil conversas antigas que não estão
+ * no funil e afogariam qualquer leitura de "quantos leads eu tenho".
+ */
+export interface PanelMetrics {
+  /** Funil vivo — o que o Kanban mostra. Não inclui o acervo. */
+  total: number;
+  active: number;
+  ready: number;
+  quoted: number;
+  waiting: number;
+  /** Acervo do legado (estágio histórico), fora do funil. */
+  archived: number;
+}
+
+/** Mesma precedência de leadStatus (routes/api.ts) — em um lugar só. */
+export function statusDaSessao(state: SessionState): 'quoted' | 'ready' | 'waiting' | 'active' {
+  if (state.completed || state.stepId === 'complete' || state.lastGuid) return 'quoted';
+  if (state.stepId === 'quote_link') return 'ready';
+  if (state.pendingProposal) return 'waiting';
+  return 'active';
+}
+
 export interface SessionStore {
   get(key: SessionKey): Promise<SessionState | null>;
   /**
@@ -199,6 +226,7 @@ export interface SessionStore {
   list(filter?: { tenantId?: string; limit?: number }): Promise<SessionState[]>;
   /** Quantos leads existem de fato (o painel mostra uma janela; isto é o total). */
   count(filter?: { tenantId?: string }): Promise<number>;
+  metrics(filter?: { tenantId?: string }): Promise<PanelMetrics>;
   /**
    * Primeiro lead que satisfaz o predicado, varrendo em lotes (memória constante).
    * Existe porque o id do painel é um hash — não dá pra consultar direto no banco,
@@ -277,6 +305,25 @@ export class InMemorySessionStore implements SessionStore {
     return [...this.store.values()]
       .filter((entry) => !filter.tenantId || entry.state.tenantId === filter.tenantId)
       .length;
+  }
+
+  async metrics(filter: { tenantId?: string } = {}): Promise<PanelMetrics> {
+    this.cleanupExpired();
+    const estados = [...this.store.values()]
+      .map((e) => e.state)
+      .filter((s) => !filter.tenantId || s.tenantId === filter.tenantId);
+    const acervo = estados.filter((s) => s.pipelineStage === 'historico');
+    const funil = estados.filter((s) => s.pipelineStage !== 'historico');
+    const conta = (chave: ReturnType<typeof statusDaSessao>): number =>
+      funil.filter((s) => statusDaSessao(s) === chave).length;
+    return {
+      total: funil.length,
+      active: conta('active'),
+      ready: conta('ready'),
+      quoted: conta('quoted'),
+      waiting: conta('waiting'),
+      archived: acervo.length,
+    };
   }
 
   async findBy(
@@ -369,6 +416,46 @@ export class PostgresSessionStore implements SessionStore {
         )
       : await pool.query('select count(*)::int as total from lead_sessions where expires_at > now()');
     return Number(result.rows[0]?.total ?? 0);
+  }
+
+  async metrics(filter: { tenantId?: string } = {}): Promise<PanelMetrics> {
+    const pool = getPostgresPool();
+    // Agregação no BANCO: contar em JS exigiria trazer dezenas de milhares de
+    // jsonb pro processo — o caminho curto pro OOM que a janela existe pra evitar.
+    // A precedência do status é a mesma de statusDaSessao; mudou lá, muda aqui.
+    const { rows } = await pool.query(
+      `select
+         count(*) filter (where estagio <> 'historico')::int as total,
+         count(*) filter (where estagio <> 'historico' and st = 'active')::int as active,
+         count(*) filter (where estagio <> 'historico' and st = 'ready')::int as ready,
+         count(*) filter (where estagio <> 'historico' and st = 'quoted')::int as quoted,
+         count(*) filter (where estagio <> 'historico' and st = 'waiting')::int as waiting,
+         count(*) filter (where estagio = 'historico')::int as archived
+       from (
+         select
+           coalesce(state->>'pipelineStage', 'novos_leads') as estagio,
+           case
+             when coalesce((state->>'completed')::boolean, false)
+               or state->>'stepId' = 'complete'
+               or nullif(state->>'lastGuid', '') is not null then 'quoted'
+             when state->>'stepId' = 'quote_link' then 'ready'
+             when jsonb_typeof(state->'pendingProposal') = 'object' then 'waiting'
+             else 'active'
+           end as st
+         from lead_sessions
+         where expires_at > now() and ($1::text is null or tenant_id = $1)
+       ) t`,
+      [filter.tenantId ?? null],
+    );
+    const r = rows[0] ?? {};
+    return {
+      total: Number(r.total ?? 0),
+      active: Number(r.active ?? 0),
+      ready: Number(r.ready ?? 0),
+      quoted: Number(r.quoted ?? 0),
+      waiting: Number(r.waiting ?? 0),
+      archived: Number(r.archived ?? 0),
+    };
   }
 
   async findBy(

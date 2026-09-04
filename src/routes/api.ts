@@ -563,15 +563,9 @@ function serializeLead(session: SessionState) {
   };
 }
 
-function panelMetrics(leads: ReturnType<typeof serializeLead>[]) {
-  return {
-    total: leads.length,
-    active: leads.filter((lead) => lead.status.key === 'active').length,
-    ready: leads.filter((lead) => lead.status.key === 'ready').length,
-    quoted: leads.filter((lead) => lead.status.key === 'quoted').length,
-    waiting: leads.filter((lead) => lead.status.key === 'waiting').length,
-  };
-}
+// panelMetrics saiu daqui: contava a JANELA (500 leads) e não a base — "Leads:
+// 500" era o teto se passando por total. Agora vem agregado do banco
+// (sessionStore.metrics), sobre o escopo inteiro da corretora.
 
 async function canAccessWhatsappInstance(auth: ReturnType<typeof resolveAuthContext>, instanceName: string): Promise<boolean> {
   const instances = await adminStore.listWhatsappInstances(auth, auth.isSuperadmin && !auth.tenantId ? undefined : auth.tenantId ?? undefined);
@@ -1133,15 +1127,16 @@ api.get('/painel/leads', async (c) => {
   const auth = resolveAuthContext(c);
   const scope = tenantScope(auth);
   const limit = resolvePanelLimit(c.req.query('limit'));
-  const [sessions, stored] = await Promise.all([
+  const [sessions, stored, metrics] = await Promise.all([
     sessionStore.list({ ...scope, limit }),
     sessionStore.count(scope),
+    sessionStore.metrics(scope),
   ]);
   const leads = sessions.map(serializeLead);
   return c.json({
     ok: true,
     auth,
-    metrics: panelMetrics(leads),
+    metrics,
     window: { limit, returned: leads.length, stored, truncated: stored > leads.length },
     leads,
     ts: new Date().toISOString(),

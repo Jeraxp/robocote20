@@ -1753,9 +1753,18 @@ td {
   gap: 10px;
 }
 
+.panel-metric-hint {
+  display: block;
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-top: 2px;
+  line-height: 1.25;
+}
+
 .panel-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* auto-fit: o cartão de acervo entra sem quebrar a linha quando existe. */
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
   margin-bottom: 18px;
 }

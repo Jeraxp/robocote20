@@ -8,12 +8,15 @@ import {
   Bike,
   Building2,
   Car,
+  Check,
   CheckCircle2,
   ChevronDown,
+  Copy,
   Home,
   X,
   Clock3,
   ExternalLink,
+  Globe,
   LayoutDashboard,
   MessageCircle,
   Plus,
@@ -195,7 +198,7 @@ interface WhatsappForm {
   displayPhone: string;
 }
 
-type PanelSection = 'leads' | 'conversas' | 'tenants' | 'users' | 'whatsapp' | 'settings' | 'support';
+type PanelSection = 'leads' | 'conversas' | 'tenants' | 'users' | 'whatsapp' | 'webchat' | 'settings' | 'support';
 
 type PanelErrorResponse = { ok: false; error?: string; authRequired?: boolean };
 
@@ -1214,6 +1217,7 @@ const sectionIcons: Record<PanelSection, typeof Activity> = {
   tenants: Building2,
   users: UsersRound,
   whatsapp: Smartphone,
+  webchat: Globe,
   settings: Settings,
   support: ShieldCheck,
 };
@@ -1241,6 +1245,7 @@ function PanelSidebar({
     { key: 'tenants' as const, label: 'Corretoras', enabled: false },
     { key: 'users' as const, label: 'Usuários', enabled: false },
     { key: 'whatsapp' as const, label: 'WhatsApp', enabled: false },
+    { key: 'webchat' as const, label: 'Webchat', enabled: false },
   ];
 
   return (
@@ -2110,6 +2115,453 @@ function SettingsSection({ token }: { token: string }): JSX.Element {
   );
 }
 
+/** Identidade + regras do webchat embutido — espelha WebchatConfig do backend (tenant_configs.config.webchat). */
+interface WebchatConfig {
+  ativo: boolean;
+  avatarUrl: string | null;
+  cor: string;
+  saudacao: string | null;
+  /** Hosts (sem esquema) onde o site da corretora pode embutir o chat. */
+  allowedOrigins: string[];
+}
+
+interface WebchatConfigResponse {
+  ok: true;
+  tenantId: string;
+  webchat: WebchatConfig;
+  agentName: string;
+}
+
+interface WebchatInstalacaoResponse {
+  ok: true;
+  tenantId: string;
+  baseUrl: string;
+  snippets: { bubble: string; iframe: string };
+}
+
+const DEFAULT_WEBCHAT_CONFIG: WebchatConfig = {
+  ativo: true,
+  avatarUrl: null,
+  cor: '#0aa5e8',
+  saudacao: null,
+  allowedOrigins: [],
+};
+
+const WEBCHAT_COR_HEX = /^#[0-9a-f]{6}$/i;
+const WEBCHAT_SAUDACAO_MAX = 300;
+const WEBCHAT_HOSTS_MAX = 20;
+
+/** O corretor cola "https://site.com.br/pagina"; o backend valida só o host. */
+function normalizarHostWebchat(linha: string): string {
+  return linha
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
+    .replace(/[/?#].*$/, '');
+}
+
+async function copiarParaAreaDeTransferencia(texto: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(texto);
+    return true;
+  } catch {
+    // Sem clipboard assíncrono (http sem TLS, permissão negada): textarea temporário.
+    try {
+      const area = document.createElement('textarea');
+      area.value = texto;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(area);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
+/**
+ * Webchat do site: simulador (iframe da página pública em modo preview) + identidade + código de instalação.
+ * Auto-contida como a SettingsSection: faz o próprio GET/PUT, não mexe no estado global do Panel.
+ * Superadmin sem tenant escolhe a corretora; impersonando ou admin, o tenant é o da sessão.
+ */
+function WebchatSection({
+  token,
+  admin,
+  tenants,
+}: {
+  token: string;
+  admin: AdminMeResponse | null;
+  tenants: AdminTenant[];
+}): JSX.Element {
+  const scopedTenantId = admin?.auth.tenantId ?? null;
+  const escolheCorretora = (admin?.auth.isSuperadmin ?? false) && !scopedTenantId;
+  const [tenantEscolhido, setTenantEscolhido] = useState('');
+  const tenantId = scopedTenantId ?? tenantEscolhido;
+
+  useEffect(() => {
+    if (escolheCorretora && !tenantEscolhido && tenants[0]) setTenantEscolhido(tenants[0].id);
+  }, [escolheCorretora, tenantEscolhido, tenants]);
+
+  const [aba, setAba] = useState<'identidade' | 'instalar'>('identidade');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [agentName, setAgentName] = useState('');
+  const [config, setConfig] = useState<WebchatConfig>(DEFAULT_WEBCHAT_CONFIG);
+  const [hostsTexto, setHostsTexto] = useState('');
+  const [instalacao, setInstalacao] = useState<WebchatInstalacaoResponse | null>(null);
+  const [simKey, setSimKey] = useState(0);
+  const [copiado, setCopiado] = useState<'bubble' | 'iframe' | null>(null);
+  const [avatarQuebrado, setAvatarQuebrado] = useState(false);
+
+  useEffect(() => {
+    if (!tenantId) {
+      setLoading(false);
+      return undefined;
+    }
+    let aborted = false;
+    // Admin/operador: o backend resolve o tenant pela sessão; superadmin sem escopo passa ?tenantId=.
+    const query = scopedTenantId ? '' : `?tenantId=${encodeURIComponent(tenantId)}`;
+    setLoading(true);
+    setError(null);
+    setSavedAt(null);
+    Promise.all([
+      panelFetch(`/api/painel/config/webchat${query}`, token).then((res) =>
+        parsePanelResponse<WebchatConfigResponse>(res, 'Não foi possível carregar a identidade do webchat.'),
+      ),
+      panelFetch(`/api/painel/webchat/instalacao${query}`, token).then((res) =>
+        parsePanelResponse<WebchatInstalacaoResponse>(res, 'Não foi possível montar o código de instalação.'),
+      ),
+    ])
+      .then(([cfg, inst]) => {
+        if (aborted) return;
+        const webchat = { ...DEFAULT_WEBCHAT_CONFIG, ...cfg.webchat };
+        setAgentName(cfg.agentName ?? '');
+        setConfig(webchat);
+        setHostsTexto(webchat.allowedOrigins.join('\n'));
+        setInstalacao(inst);
+        setAvatarQuebrado(false);
+      })
+      .catch((e: Error) => {
+        if (!aborted) setError(e.message);
+      })
+      .finally(() => {
+        if (!aborted) setLoading(false);
+      });
+    return () => {
+      aborted = true;
+    };
+  }, [token, tenantId, scopedTenantId]);
+
+  const salvar = async (): Promise<void> => {
+    const nome = agentName.trim();
+    if (!nome) {
+      setError('Informe o nome do agente.');
+      return;
+    }
+    if (!WEBCHAT_COR_HEX.test(config.cor)) {
+      setError('Cor inválida — use o formato #1a2b3c.');
+      return;
+    }
+    const hosts = Array.from(new Set(hostsTexto.split('\n').map(normalizarHostWebchat).filter(Boolean)));
+    if (hosts.length > WEBCHAT_HOSTS_MAX) {
+      setError(`No máximo ${WEBCHAT_HOSTS_MAX} domínios permitidos.`);
+      return;
+    }
+    const saudacao = (config.saudacao ?? '').trim();
+    if (saudacao.length > WEBCHAT_SAUDACAO_MAX) {
+      setError(`A saudação deve ter no máximo ${WEBCHAT_SAUDACAO_MAX} caracteres.`);
+      return;
+    }
+    const avatarUrl = (config.avatarUrl ?? '').trim();
+    if (avatarUrl && !/^https?:\/\//i.test(avatarUrl)) {
+      setError('O avatar precisa ser um endereço completo, começando com https://');
+      return;
+    }
+    const payload: WebchatConfig = {
+      ativo: config.ativo,
+      avatarUrl: avatarUrl || null,
+      cor: config.cor.toLowerCase(),
+      saudacao: saudacao || null,
+      allowedOrigins: hosts,
+    };
+
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await panelFetch('/api/painel/config/webchat', token, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...(scopedTenantId ? {} : { tenantId }), agentName: nome, webchat: payload }),
+      });
+      await parsePanelResponse<{ ok: true }>(res, 'Não foi possível salvar a identidade do webchat.');
+      setConfig(payload);
+      setHostsTexto(hosts.join('\n'));
+      setAgentName(nome);
+      setSavedAt(new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }));
+      // O simulador recarrega pra mostrar a identidade recém-salva.
+      setSimKey((k) => k + 1);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const copiar = async (qual: 'bubble' | 'iframe'): Promise<void> => {
+    const texto = instalacao?.snippets[qual];
+    if (!texto) return;
+    const ok = await copiarParaAreaDeTransferencia(texto);
+    if (!ok) {
+      setError('Não foi possível copiar — selecione o código e copie manualmente.');
+      return;
+    }
+    setCopiado(qual);
+    window.setTimeout(() => setCopiado((atual) => (atual === qual ? null : atual)), 2000);
+  };
+
+  const tenant = tenants.find((t) => t.id === tenantId);
+  const slug = tenant?.slug ?? tenantId;
+  const baseUrl = (instalacao?.baseUrl ?? window.location.origin).replace(/\/$/, '');
+  const simUrl = tenantId && instalacao ? `${baseUrl}/webchat?tenant=${encodeURIComponent(slug)}&preview=1` : '';
+  const avatarUrl = (config.avatarUrl ?? '').trim();
+  const inicial = (agentName.trim().charAt(0) || 'R').toUpperCase();
+
+  return (
+    <section className="panel-section-page">
+      <header className="panel-hero compact">
+        <div>
+          <h1>Webchat do site</h1>
+          <p>O mesmo agente do WhatsApp, embutido no site da corretora. Ajuste a identidade, teste no simulador e copie o código de instalação.</p>
+        </div>
+        {escolheCorretora ? (
+          <label className="webchat-tenant-pick">
+            Corretora
+            <select value={tenantEscolhido} onChange={(event) => setTenantEscolhido(event.target.value)}>
+              {tenants.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+      </header>
+
+      <div className="webchat-admin-grid">
+        <section className="panel-surface admin-create-card webchat-sim">
+          <div className="admin-card-header">
+            <div>
+              <strong>Simulador</strong>
+              <span>Exatamente o que o lead vê no site.</span>
+            </div>
+            <div className="webchat-sim-actions">
+              <button type="button" className="panel-refresh" onClick={() => setSimKey((k) => k + 1)} disabled={!simUrl}>
+                <RefreshCw size={16} />
+                Recarregar
+              </button>
+              <button
+                type="button"
+                className="panel-refresh"
+                onClick={() => window.open(simUrl, '_blank', 'noopener')}
+                disabled={!simUrl}
+              >
+                <ExternalLink size={16} />
+                Abrir em nova aba
+              </button>
+            </div>
+          </div>
+          {simUrl ? (
+            <iframe key={simKey} className="webchat-sim-frame" src={simUrl} title="Simulador do webchat" />
+          ) : (
+            <p className="admin-empty">{loading ? 'Carregando simulador…' : 'Selecione uma corretora para simular o atendimento.'}</p>
+          )}
+          {!config.ativo && !loading ? (
+            <p className="admin-empty">Canal desligado — o site da corretora não carrega o chat enquanto ele estiver inativo.</p>
+          ) : null}
+        </section>
+
+        <section className="panel-surface admin-create-card webchat-config">
+          <div className="webchat-tabs" role="tablist" aria-label="Configuração do webchat">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={aba === 'identidade'}
+              className={aba === 'identidade' ? 'active' : ''}
+              onClick={() => setAba('identidade')}
+            >
+              Identidade
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={aba === 'instalar'}
+              className={aba === 'instalar' ? 'active' : ''}
+              onClick={() => setAba('instalar')}
+            >
+              Instalar
+            </button>
+          </div>
+
+          {aba === 'identidade' ? (
+            <form
+              className="webchat-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void salvar();
+              }}
+            >
+              {error ? <div className="coverage-banner coverage-banner-error">{error}</div> : null}
+              {savedAt ? (
+                <div className="coverage-banner coverage-banner-success">Salvo às {savedAt}. O simulador já mostra a nova identidade.</div>
+              ) : null}
+
+              <label>
+                Nome do agente
+                <input
+                  value={agentName}
+                  onChange={(event) => setAgentName(event.target.value)}
+                  placeholder="Ex.: Lia"
+                  maxLength={60}
+                  disabled={loading}
+                  required
+                />
+                <small>Aparece na saudação, no WhatsApp e na sala de cotação.</small>
+              </label>
+
+              <div className="webchat-avatar-row">
+                <div className="webchat-avatar-preview" style={{ background: WEBCHAT_COR_HEX.test(config.cor) ? config.cor : DEFAULT_WEBCHAT_CONFIG.cor }}>
+                  {avatarUrl && !avatarQuebrado ? (
+                    <img src={avatarUrl} alt="" onError={() => setAvatarQuebrado(true)} />
+                  ) : (
+                    <span>{inicial}</span>
+                  )}
+                </div>
+                <label>
+                  Avatar (endereço da imagem)
+                  <input
+                    value={config.avatarUrl ?? ''}
+                    onChange={(event) => {
+                      setAvatarQuebrado(false);
+                      setConfig({ ...config, avatarUrl: event.target.value });
+                    }}
+                    placeholder="https://…/avatar.png"
+                    inputMode="url"
+                    disabled={loading}
+                  />
+                  <small>Quadrada, de preferência 256×256. Sem imagem, mostramos a inicial do nome.</small>
+                </label>
+              </div>
+
+              <label>
+                Cor
+                <div className="webchat-color-row">
+                  <input
+                    type="color"
+                    value={WEBCHAT_COR_HEX.test(config.cor) ? config.cor : DEFAULT_WEBCHAT_CONFIG.cor}
+                    onChange={(event) => setConfig({ ...config, cor: event.target.value })}
+                    disabled={loading}
+                    aria-label="Escolher cor"
+                  />
+                  <input
+                    value={config.cor}
+                    onChange={(event) => setConfig({ ...config, cor: event.target.value.trim() })}
+                    placeholder="#0aa5e8"
+                    maxLength={7}
+                    disabled={loading}
+                  />
+                </div>
+                <small>Botão flutuante, cabeçalho e balões do agente.</small>
+              </label>
+
+              <label>
+                Saudação (opcional)
+                <textarea
+                  value={config.saudacao ?? ''}
+                  onChange={(event) => setConfig({ ...config, saudacao: event.target.value })}
+                  placeholder="Deixe em branco para usar a saudação padrão do agente."
+                  rows={3}
+                  maxLength={WEBCHAT_SAUDACAO_MAX}
+                  disabled={loading}
+                />
+                <small>{(config.saudacao ?? '').length}/{WEBCHAT_SAUDACAO_MAX}</small>
+              </label>
+
+              <label>
+                Domínios permitidos
+                <textarea
+                  value={hostsTexto}
+                  onChange={(event) => setHostsTexto(event.target.value)}
+                  placeholder={'www.suacorretora.com.br\nsuacorretora.com.br'}
+                  rows={3}
+                  disabled={loading}
+                  spellCheck={false}
+                />
+                <small>Um por linha. Vazio = qualquer site pode embutir o chat desta corretora.</small>
+              </label>
+
+              <label className="webchat-toggle">
+                <input
+                  type="checkbox"
+                  checked={config.ativo}
+                  onChange={(event) => setConfig({ ...config, ativo: event.target.checked })}
+                  disabled={loading}
+                />
+                <span>Webchat ativo — desligado, o botão some do site e a página do chat responde "canal indisponível".</span>
+              </label>
+
+              <div className="manual-lead-actions">
+                <button type="submit" className="panel-refresh" disabled={saving || loading || !tenantId}>
+                  <Save size={17} />
+                  {saving ? 'Salvando…' : 'Salvar'}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="webchat-install">
+              {error ? <div className="coverage-banner coverage-banner-error">{error}</div> : null}
+              <p className="webchat-install-hint">
+                Cole um dos códigos abaixo no site da corretora, <strong>antes do <code>&lt;/body&gt;</code></strong>. O botão flutuante é o jeito recomendado; o iframe serve para uma página de atendimento dedicada.
+              </p>
+
+              <div className="webchat-snippet">
+                <div className="webchat-snippet-head">
+                  <strong>Botão flutuante</strong>
+                  <button type="button" className="webchat-copy" onClick={() => void copiar('bubble')} disabled={!instalacao}>
+                    {copiado === 'bubble' ? <Check size={15} /> : <Copy size={15} />}
+                    {copiado === 'bubble' ? 'Copiado' : 'Copiar'}
+                  </button>
+                </div>
+                <pre>{instalacao?.snippets.bubble ?? (loading ? 'Carregando…' : '—')}</pre>
+              </div>
+
+              <div className="webchat-snippet">
+                <div className="webchat-snippet-head">
+                  <strong>Chat embutido na página (iframe)</strong>
+                  <button type="button" className="webchat-copy" onClick={() => void copiar('iframe')} disabled={!instalacao}>
+                    {copiado === 'iframe' ? <Check size={15} /> : <Copy size={15} />}
+                    {copiado === 'iframe' ? 'Copiado' : 'Copiar'}
+                  </button>
+                </div>
+                <pre>{instalacao?.snippets.iframe ?? (loading ? 'Carregando…' : '—')}</pre>
+              </div>
+
+              <p className="webchat-install-hint">
+                Se você preencheu os domínios permitidos na aba Identidade, só esses sites conseguem carregar o chat.
+              </p>
+            </div>
+          )}
+        </section>
+      </div>
+    </section>
+  );
+}
+
 export function Panel(): JSX.Element {
   const [activeSection, setActiveSection] = useState<PanelSection>('leads');
   const [panelToken] = useState(readStoredPanelToken);
@@ -2720,6 +3172,8 @@ export function Panel(): JSX.Element {
             onState={(instanceName) => void updateWhatsappState(instanceName)}
             onRefresh={() => void refreshWhatsapp()}
           />
+        ) : activeSection === 'webchat' ? (
+          <WebchatSection token={panelToken} admin={admin} tenants={tenants} />
         ) : activeSection === 'settings' ? (
           <SettingsSection token={panelToken} />
         ) : (

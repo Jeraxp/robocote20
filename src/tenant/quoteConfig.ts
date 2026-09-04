@@ -90,6 +90,23 @@ export interface CoverageResidencial {
   terremoto: number;               // earthquake — R$
 }
 
+/**
+ * Identidade e instalação do webchat embutido — mora no MESMO JSON versionado
+ * (histórico, hash e `source` de graça). O nome do agente NÃO fica aqui: é a
+ * coluna `tenants.agent_name`, lida por `getAgentName` (WhatsApp, IA e Quote
+ * Room já dependem dela). Leitura com defaults em `tenant/webchat.ts`.
+ */
+export interface WebchatConfigShape {
+  ativo: boolean;
+  avatarUrl: string | null;
+  /** Cor de destaque, hex #rrggbb. */
+  cor: string;
+  /** Saudação opcional acima do chat (o aviso de IA continua obrigatório no motor). */
+  saudacao: string | null;
+  /** Hosts autorizados a embutir (vazio = qualquer site). */
+  allowedOrigins: string[];
+}
+
 export interface TenantQuoteConfigShape {
   version: string;
   plano?: 'seguros' | 'saude' | 'ambos';
@@ -103,6 +120,7 @@ export interface TenantQuoteConfigShape {
     residencial?: CoverageResidencial;
     // vida_*, rc_profissional → próximos slices
   };
+  webchat?: Partial<WebchatConfigShape>;
 }
 
 /** Ramos que a corretora declarou que oferece (toggle no painel). Vazio = nenhum. */
@@ -156,6 +174,12 @@ export async function getTenantCoverageResidencial(tenantId: string): Promise<Co
     throw new Error(`Tenant ${tenantId} não tem cobertura residencial configurada. Complete o onboarding ou ajuste no painel.`);
   }
   return coverage;
+}
+
+/** Bloco webchat da config ativa (pode faltar em tenants antigos — defaults em `tenant/webchat.ts`). */
+export async function getTenantWebchatConfig(tenantId: string): Promise<Partial<WebchatConfigShape> | undefined> {
+  const config = await getTenantQuoteConfig(tenantId);
+  return config.webchat;
 }
 
 export async function getTenantSeguradoras(tenantId: string): Promise<string[]> {

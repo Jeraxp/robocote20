@@ -10,6 +10,9 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 
+/** Sem Postgres (dev local, rede de testes): o nome gravado pelo painel vive aqui. */
+const memoria = new Map<string, string>();
+
 function envFallback(): string {
   return process.env.ROBOCOTE_AGENT_NAME?.trim() || DEFAULT_AGENT_NAME;
 }
@@ -24,7 +27,7 @@ function envFallback(): string {
  * Pra invalidar manualmente (após editar tenant no painel), chamar `clearAgentNameCache`.
  */
 export async function getAgentName(tenantId: string): Promise<string> {
-  if (!isPostgresConfigured()) return envFallback();
+  if (!isPostgresConfigured()) return memoria.get(tenantId) || envFallback();
 
   const cached = cache.get(tenantId);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
@@ -49,4 +52,24 @@ export async function getAgentName(tenantId: string): Promise<string> {
 export function clearAgentNameCache(tenantId?: string): void {
   if (tenantId) cache.delete(tenantId);
   else cache.clear();
+}
+
+/**
+ * Grava o nome do agente da corretora (edição pelo painel). Vazio/null volta ao
+ * fallback (env → 'Robocote'). Invalida o cache na hora: a próxima saudação já
+ * sai com o nome novo.
+ */
+export async function setAgentName(tenantId: string, name: string | null): Promise<void> {
+  const limpo = name?.trim() || null;
+  if (!isPostgresConfigured()) {
+    if (limpo) memoria.set(tenantId, limpo);
+    else memoria.delete(tenantId);
+    clearAgentNameCache(tenantId);
+    return;
+  }
+  await getPostgresPool().query(
+    'update tenants set agent_name = $1, updated_at = now() where id = $2',
+    [limpo, tenantId],
+  );
+  clearAgentNameCache(tenantId);
 }

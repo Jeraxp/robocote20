@@ -40,27 +40,6 @@ export interface QuoteRecommendation {
   reason: string;
 }
 
-export interface CatalogBrand {
-  id: string;
-  vehicle_type: string;
-  value: string;
-  text: string;
-}
-
-export interface CatalogModelFipe {
-  fipe_url: string;
-  fipe_code: string;
-  fipe_value: number;
-}
-
-export interface CatalogModel {
-  model_id: string;
-  value: string;
-  text: string;
-  fuel_type: string;
-  data_fipe: CatalogModelFipe;
-}
-
 export type CoveragePreference = 'Economia' | 'Equilíbrio' | 'Proteção' | null;
 
 export interface QuoteCustomerInfo {

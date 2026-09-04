@@ -6,6 +6,7 @@ import { test } from './routes/test.js';
 import { api } from './routes/api.js';
 import { ingest } from './routes/ingest.js';
 import { chat } from './routes/chat.js';
+import { webchat, webchatPainel } from './routes/webchat.js';
 import { whatsapp } from './routes/whatsapp.js';
 import { getAssistantModelConfig } from './assistant/autoF1.js';
 import { getRagConfig } from './assistant/rag.js';
@@ -15,7 +16,14 @@ import { getPostgresConfig } from './db/postgres.js';
 const app = new Hono();
 
 app.get('/', (c) => c.redirect('/public/index.html'));
-app.get('/webchat', (c) => c.redirect('/public/quote-room/index.html?mode=webchat'));
+// O webchat é página nossa (o site da corretora embute por iframe) — nada de
+// redirect: URL estável é o que o cliente cola no site dele.
+app.get('/webchat', serveStatic({ path: './public/webchat/index.html' }));
+app.get('/webchat.js', async (c, next) => {
+  c.header('Cache-Control', 'public, max-age=300');
+  c.header('Content-Type', 'application/javascript; charset=utf-8');
+  return serveStatic({ path: './public/webchat/loader.js' })(c, next);
+});
 app.get('/teste', (c) => c.redirect('/public/teste/index.html'));
 app.get('/painel', (c) => c.redirect('/public/quote-room/index.html?mode=painel'));
 app.get('/quote-room', (c) => c.redirect('/public/quote-room/index.html'));
@@ -64,6 +72,8 @@ app.route('/test', test);
 app.route('/api', api);
 app.route('/api/ingest', ingest);
 app.route('/api/chat', chat);
+app.route('/api/webchat', webchat);
+app.route('/api/painel', webchatPainel);
 app.route('/webhooks', whatsapp);
 
 app.use('/public/*', serveStatic({ root: './' }));

@@ -1,0 +1,319 @@
+/*
+ * Webchat embutido — tema pela cor da corretora.
+ * O JS define --wc-cor (hex da identidade) e --wc-cor-texto (branco ou escuro,
+ * decidido pelo contraste). Todo o resto deriva daqui; cor só tem função semântica.
+ */
+:root {
+  color-scheme: light;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --wc-cor: #0aa5e8;
+  --wc-cor-texto: #ffffff;
+  --wc-cor-suave: #eaf7ff;
+  --wc-cor-escura: #0888c0;
+  --wc-fundo: #f7f9fc;
+  --wc-superficie: #ffffff;
+  --wc-tinta: #202124;
+  --wc-fraco: #667085;
+  --wc-linha: #dae4ee;
+  --wc-bolha-bot: #eef2f7;
+  --wc-erro: #b42318;
+  --wc-erro-suave: #fff1f2;
+  --wc-raio: 16px;
+}
+/* Derivadas da cor da corretora onde o navegador sabe misturar; acima fica o fallback. */
+@supports (color: color-mix(in srgb, red, blue)) {
+  :root {
+    --wc-cor-suave: color-mix(in srgb, var(--wc-cor) 10%, #ffffff);
+    --wc-cor-escura: color-mix(in srgb, var(--wc-cor) 82%, #000000);
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--wc-superficie);
+  color: var(--wc-tinta);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+.wc {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* ---------- cabeçalho ---------- */
+.wc-cabecalho {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--wc-cor);
+  color: var(--wc-cor-texto);
+}
+.wc-avatar {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.24);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 16px;
+  overflow: hidden;
+}
+.wc-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wc-quem { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.wc-quem strong {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wc-status { font-size: 12px; opacity: 0.88; display: flex; align-items: center; gap: 6px; }
+.wc-ponto {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #2ee08a;
+  display: inline-block;
+}
+.wc[data-estado="carregando"] .wc-ponto { background: #ffd166; }
+.wc[data-estado="indisponivel"] .wc-ponto { background: #c9d2dc; }
+.wc[data-escrevendo="1"] .wc-ponto { animation: wc-pulsa 1s ease-in-out infinite; }
+.wc-selo {
+  flex: none;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.28);
+}
+.wc-icone {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  opacity: 0.85;
+}
+.wc-icone:hover, .wc-icone:focus-visible { background: rgba(255, 255, 255, 0.2); opacity: 1; }
+.wc-icone:focus-visible { outline: 2px solid var(--wc-cor-texto); outline-offset: 1px; }
+
+/* ---------- feed ---------- */
+.wc-feed {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--wc-fundo);
+}
+.wc-msg {
+  max-width: min(560px, 86%);
+  padding: 9px 12px;
+  border-radius: var(--wc-raio);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.wc-msg.bot {
+  align-self: flex-start;
+  background: var(--wc-bolha-bot);
+  border-bottom-left-radius: 4px;
+}
+.wc-msg.lead {
+  align-self: flex-end;
+  background: var(--wc-cor);
+  color: var(--wc-cor-texto);
+  border-bottom-right-radius: 4px;
+}
+.wc-msg.sistema {
+  align-self: center;
+  max-width: 100%;
+  padding: 2px 8px;
+  background: transparent;
+  color: var(--wc-fraco);
+  font-size: 12px;
+  text-align: center;
+}
+.wc-msg.erro {
+  align-self: center;
+  max-width: 92%;
+  background: var(--wc-erro-suave);
+  color: var(--wc-erro);
+  font-size: 13px;
+  text-align: center;
+}
+.wc-msg a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.wc-msg.bot a { color: var(--wc-cor-escura); }
+.wc-msg em { font-style: italic; opacity: 0.8; }
+.wc-msg strong { font-weight: 600; }
+
+/* chips de escolha — vêm do mesmo planejador do WhatsApp */
+.wc-chips {
+  align-self: flex-start;
+  max-width: 92%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -2px 0 2px 2px;
+}
+.wc-chip {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.2;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1.5px solid var(--wc-cor);
+  background: var(--wc-superficie);
+  color: var(--wc-cor-escura);
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background-color 0.15s, color 0.15s;
+}
+.wc-chip:hover, .wc-chip:focus-visible { background: var(--wc-cor-suave); }
+.wc-chip:focus-visible { outline: 2px solid var(--wc-cor); outline-offset: 2px; }
+.wc-chip[disabled] { opacity: 0.45; cursor: default; pointer-events: none; }
+.wc-chip.escolhido {
+  background: var(--wc-cor);
+  border-color: var(--wc-cor);
+  color: var(--wc-cor-texto);
+  opacity: 1;
+}
+.wc-chip small { display: block; font-weight: 400; font-size: 11px; color: var(--wc-fraco); }
+.wc-chip svg { width: 14px; height: 14px; flex: none; }
+
+/* indicador "escrevendo" */
+.wc-escrevendo {
+  align-self: flex-start;
+  display: flex;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: var(--wc-raio);
+  border-bottom-left-radius: 4px;
+  background: var(--wc-bolha-bot);
+}
+.wc-escrevendo i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--wc-fraco);
+  animation: wc-salta 1.2s ease-in-out infinite;
+}
+.wc-escrevendo i:nth-child(2) { animation-delay: 0.15s; }
+.wc-escrevendo i:nth-child(3) { animation-delay: 0.3s; }
+
+/* estado sem canal */
+/* `display` de qualquer valor derrota o atributo `hidden` — sem esta regra o
+   painel de "canal indisponível" aparece no meio de uma conversa saudável. */
+[hidden] { display: none !important; }
+
+.wc-vazio {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--wc-fraco);
+  background: var(--wc-fundo);
+}
+.wc-vazio strong { display: block; color: var(--wc-tinta); margin-bottom: 4px; }
+.wc-vazio p { margin: 0; font-size: 13px; }
+.wc[data-estado="indisponivel"] .wc-feed,
+.wc[data-estado="indisponivel"] .wc-composer { display: none; }
+
+/* ---------- composer ---------- */
+.wc-composer {
+  flex: none;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: end;
+  padding: 10px 12px;
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--wc-linha);
+  background: var(--wc-superficie);
+}
+.wc-composer textarea {
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  resize: none;
+  min-height: 40px;
+  max-height: 120px;
+  padding: 10px 14px;
+  border: 1px solid var(--wc-linha);
+  border-radius: 20px;
+  background: var(--wc-fundo);
+  color: var(--wc-tinta);
+  outline: none;
+}
+.wc-composer textarea:focus {
+  border-color: var(--wc-cor);
+  box-shadow: 0 0 0 3px var(--wc-cor-suave);
+}
+.wc-composer textarea:disabled { opacity: 0.6; }
+.wc-enviar {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--wc-cor);
+  color: var(--wc-cor-texto);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: transform 0.12s, opacity 0.12s;
+}
+.wc-enviar:hover:not([disabled]) { transform: scale(1.06); }
+.wc-enviar:focus-visible { outline: 2px solid var(--wc-cor-escura); outline-offset: 2px; }
+.wc-enviar[disabled] { opacity: 0.45; cursor: default; }
+
+.wc-oculto {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@keyframes wc-salta {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+@keyframes wc-pulsa {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* mobile: 16px no campo evita o zoom automático do iOS ao focar */
+@media (max-width: 480px) {
+  .wc-composer textarea { font-size: 16px; }
+  .wc-msg { max-width: 90%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wc-escrevendo i, .wc-ponto { animation: none !important; }
+  .wc-chip, .wc-enviar { transition: none; }
+}

@@ -3455,3 +3455,245 @@ td {
 
 /* Quote Room residencial: o endereço curto pode ser longo — quebra sem estourar o card. */
 .vehicle-card.property-card p { overflow-wrap: anywhere; }
+
+/* ─── Webchat do site (painel): simulador à esquerda, identidade/instalação à direita ─── */
+.webchat-tenant-pick {
+  display: grid;
+  gap: 6px;
+  min-width: 240px;
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 800;
+}
+.webchat-tenant-pick select {
+  height: 42px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.webchat-admin-grid {
+  display: grid;
+  grid-template-columns: minmax(340px, 440px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.webchat-sim-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.webchat-sim-actions .panel-refresh {
+  height: 36px;
+  font-size: 12.5px;
+}
+
+/* Mesma altura do iframe do snippet (640) — o corretor vê o que o lead vê. */
+.webchat-sim-frame {
+  display: block;
+  width: 100%;
+  height: 640px;
+  border: 0;
+  background: var(--bg);
+}
+
+.webchat-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.webchat-tabs button {
+  appearance: none;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  padding: 10px 14px;
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.webchat-tabs button.active {
+  color: var(--blue);
+  border-bottom-color: var(--blue);
+}
+
+.webchat-form {
+  display: grid;
+  gap: 16px;
+  padding: 18px 16px;
+}
+.webchat-form label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 800;
+}
+.webchat-form small {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.webchat-form input:not([type='checkbox']):not([type='color']),
+.webchat-form textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 13px;
+  font-family: inherit;
+}
+.webchat-form input:not([type='checkbox']):not([type='color']) {
+  height: 42px;
+}
+.webchat-form textarea {
+  padding: 10px 11px;
+  resize: vertical;
+  line-height: 1.4;
+}
+.webchat-form input:focus,
+.webchat-form textarea:focus {
+  outline: 3px solid rgba(10, 165, 232, 0.14);
+  border-color: var(--blue);
+}
+.webchat-form input:disabled,
+.webchat-form textarea:disabled {
+  opacity: 0.6;
+}
+.webchat-form .coverage-banner {
+  margin-bottom: 0;
+}
+
+.webchat-avatar-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+}
+.webchat-avatar-preview {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 26px;
+  font-weight: 900;
+  box-shadow: 0 6px 16px rgba(31, 52, 82, 0.18);
+}
+.webchat-avatar-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.webchat-color-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 160px);
+  gap: 8px;
+  align-items: center;
+}
+.webchat-color-row input[type='color'] {
+  width: 52px;
+  height: 42px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.webchat-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  font-weight: 600 !important;
+}
+.webchat-toggle input {
+  margin-top: 2px;
+  width: 16px;
+  height: 16px;
+}
+
+.webchat-install {
+  display: grid;
+  gap: 14px;
+  padding: 18px 16px;
+}
+.webchat-install-hint {
+  margin: 0;
+  color: var(--muted-strong);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.webchat-install-hint code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-soft);
+  font-size: 12px;
+}
+.webchat-snippet {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.webchat-snippet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--surface-soft);
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.webchat-snippet pre {
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.webchat-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.webchat-copy:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@media (max-width: 1180px) {
+  .webchat-admin-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .webchat-sim-frame {
+    height: 560px;
+  }
+}

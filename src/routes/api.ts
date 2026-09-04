@@ -11,6 +11,7 @@ import {
   tenantScope,
   writableTenantId,
 } from '../auth/context.js';
+import { requirePanelAccess, resolveConfigTenantId } from './painelAcesso.js';
 import { authMiddleware } from '../auth/middleware.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import {
@@ -79,25 +80,8 @@ function readPanelToken(c: Context): string {
   return '';
 }
 
-function requirePanelAccess(c: Context): Response | null {
-  // 1. Sessão real (login) injetada pelo authMiddleware — caminho normal.
-  const auth = resolveAuthContext(c);
-  if (auth.authMode === 'session') return null;
-
-  // 2. Fallback dev/local: token de painel (a menos que explicitamente desabilitado).
-  if (!TOKEN_AUTH_DISABLED) {
-    const expected = process.env.ROBOCOTE_PANEL_TOKEN?.trim();
-    if (!expected) return null; // sem token configurado = alpha aberto (dev local)
-    const token = readPanelToken(c);
-    if (token && secureTokenEquals(token, expected)) return null;
-  }
-
-  return c.json({
-    ok: false,
-    authRequired: true,
-    error: 'acesso ao painel requer login',
-  }, 401);
-}
+// requirePanelAccess e resolveConfigTenantId vivem em routes/painelAcesso.ts
+// desde que o webchat ganhou rotas próprias — regra de acesso duplicada diverge.
 
 // ─── Autenticação real (login + sessão server-side) ─────────────────────────
 const loginSchema = z.object({
@@ -722,6 +706,8 @@ api.get('/admin/me', async (c) => {
       // Conversas: acompanhar o diálogo IA↔lead ao vivo (Etapa A, só leitura).
       // Todo papel vê — o operador é justamente quem mais precisa desta tela.
       { key: 'conversas', label: 'Conversas', enabled: true },
+      // Webchat: identidade e instalação são configuração da corretora, como Configurações.
+      { key: 'webchat', label: 'Webchat', enabled: auth.role !== 'operador' },
       { key: 'tenants', label: 'Corretoras', enabled: auth.isSuperadmin },
       { key: 'users', label: 'Usuários', enabled: canManageUsers(auth) },
       { key: 'whatsapp', label: 'WhatsApp', enabled: canManageWhatsapp(auth) },
@@ -1537,9 +1523,7 @@ const coverageResidencialPutSchema = z.object({
 // Ramos vehicle aceitos nos endpoints de cobertura (auto/moto/caminhão — mesmo motor Segfy).
 const VEHICLE_RAMO_SET = new Set(['auto', 'moto', 'caminhao']);
 
-function resolveConfigTenantId(c: Context, auth: ReturnType<typeof resolveAuthContext>, bodyTenantId?: string): string {
-  return auth.tenantId ?? (auth.isSuperadmin ? (c.req.query('tenantId') ?? bodyTenantId ?? '') : '');
-}
+// resolveConfigTenantId: ver routes/painelAcesso.ts
 
 /**
  * GET /api/painel/config/coverage/:ramo — lê cobertura de um ramo vehicle (auto/moto/caminhao).

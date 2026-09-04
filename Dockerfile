@@ -20,6 +20,7 @@ COPY persona ./persona
 COPY public/index.html ./public/index.html
 # Bancada de teste manual (/teste) — estática, também precisa sobreviver ao build.
 COPY public/teste ./public/teste
+COPY public/webchat ./public/webchat
 
 # Builda o frontend (vai pra public/quote-room/).
 RUN npm run build:web

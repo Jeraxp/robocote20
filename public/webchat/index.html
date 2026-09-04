@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="color-scheme" content="light">
+<title>Atendimento</title>
+<link rel="stylesheet" href="/public/webchat/widget.css?v=20260904">
+</head>
+<body>
+<!--
+  Página do webchat embutido (iframe no site da corretora). Sem build, sem dependência:
+  o widget.js lê ?tenant= (e ?preview=1 / ?embed=1), busca a identidade da corretora,
+  retoma a conversa e fala com o MESMO motor do WhatsApp via /api/chat/*.
+-->
+<div class="wc" id="wc" data-estado="carregando">
+  <header class="wc-cabecalho">
+    <div class="wc-avatar" id="wcAvatar" aria-hidden="true">
+      <span id="wcInicial"></span>
+      <img id="wcAvatarImg" alt="" hidden>
+    </div>
+    <div class="wc-quem">
+      <strong id="wcNome">Atendimento</strong>
+      <span class="wc-status" id="wcStatus"><i class="wc-ponto" aria-hidden="true"></i><span id="wcStatusTexto">conectando…</span></span>
+    </div>
+    <span class="wc-selo" id="wcSelo" hidden>pré-visualização</span>
+    <button type="button" class="wc-icone" id="wcNova" title="Nova conversa" aria-label="Nova conversa" hidden>
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+    </button>
+    <button type="button" class="wc-icone" id="wcFechar" title="Fechar" aria-label="Fechar atendimento" hidden>
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </header>
+
+  <main class="wc-feed" id="wcFeed" role="log" aria-live="polite" aria-relevant="additions" aria-label="Conversa"></main>
+
+  <div class="wc-vazio" id="wcIndisponivel" hidden>
+    <div>
+      <strong>Canal indisponível</strong>
+      <p>Este atendimento não está ativo no momento. Tente novamente mais tarde.</p>
+    </div>
+  </div>
+
+  <form class="wc-composer" id="wcForm" autocomplete="off">
+    <label class="wc-oculto" for="wcTexto">Sua mensagem</label>
+    <textarea id="wcTexto" rows="1" placeholder="Escreva sua mensagem…" maxlength="2000" enterkeyhint="send" disabled></textarea>
+    <button type="submit" class="wc-enviar" id="wcEnviar" aria-label="Enviar mensagem" disabled>
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M3.4 20.6 21.5 12 3.4 3.4 3.4 10l12.1 2-12.1 2z"/></svg>
+    </button>
+  </form>
+</div>
+<script src="/public/webchat/widget.js?v=20260904"></script>
+</body>
+</html>

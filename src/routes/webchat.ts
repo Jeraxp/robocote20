@@ -24,7 +24,9 @@ import {
   webchatConfigSchema,
   clearWebchatCache,
 } from '../tenant/webchat.js';
+import { origemPermitida } from '../tenant/webchat.js';
 import { getAgentName, setAgentName } from '../tenant/agent.js';
+import { limitarPorIp } from '../middleware/limites.js';
 import { requirePanelAccess, resolveAuthContext, resolveConfigTenantId } from './painelAcesso.js';
 
 export const webchat = new Hono();
@@ -42,18 +44,46 @@ function refDoPedido(c: Context): string | undefined {
 
 // ─── Pública: o que a tela precisa antes da primeira fala ───────────────────
 
+// Rota pública e barata, mas ainda assim pública: sem teto, um dicionário de
+// slugs mapeia a carteira inteira de corretoras em segundos.
+webchat.use('/identidade', limitarPorIp);
+
 webchat.get('/identidade', async (c) => {
   const tenant = await resolveWebchatTenant(refDoPedido(c));
-  if (!tenant) {
+  const origem = c.req.header('origin') || c.req.header('referer');
+  if (!tenant || !origemPermitida(tenant.config, origem)) {
     return c.json({ ok: false, error: 'canal indisponível' }, 404);
   }
   const identidade = await getWebchatIdentidade(tenant);
-  // Curto de propósito: o corretor troca cor/nome no painel e quer ver na hora.
-  c.header('Cache-Control', 'public, max-age=60');
+  // O loader roda no site da corretora — outra origem. Dado 100% público.
+  c.header('Access-Control-Allow-Origin', '*');
+  // Sem cache: o corretor troca a cor no painel e quer ver na hora. A resposta
+  // é minúscula; guardar 60s só criaria a dúvida "salvou ou não?".
+  c.header('Cache-Control', 'no-store');
   return c.json({ ok: true, ...identidade });
 });
 
+webchat.options('/identidade', (c) => {
+  c.header('Access-Control-Allow-Origin', '*');
+  c.header('Access-Control-Allow-Headers', 'content-type');
+  return c.body(null, 204);
+});
+
 // ─── Painel: identidade e instalação ────────────────────────────────────────
+
+/**
+ * Configuração da corretora é coisa de gestor. A navegação já escondia do
+ * operador; esconder na tela e deixar a rota aberta é guarda de fachada.
+ */
+function exigirGestor(c: Context): Response | null {
+  const negado = requirePanelAccess(c);
+  if (negado) return negado;
+  const auth = resolveAuthContext(c);
+  if (auth.role === 'operador') {
+    return c.json({ ok: false, error: 'seu perfil não altera a configuração do webchat' }, 403);
+  }
+  return null;
+}
 
 const putSchema = z.object({
   tenantId: z.string().optional(),
@@ -62,7 +92,7 @@ const putSchema = z.object({
 });
 
 webchatPainel.get('/config/webchat', async (c) => {
-  const denied = requirePanelAccess(c);
+  const denied = exigirGestor(c);
   if (denied) return denied;
 
   const auth = resolveAuthContext(c);
@@ -79,7 +109,7 @@ webchatPainel.get('/config/webchat', async (c) => {
 });
 
 webchatPainel.put('/config/webchat', async (c) => {
-  const denied = requirePanelAccess(c);
+  const denied = exigirGestor(c);
   if (denied) return denied;
 
   const auth = resolveAuthContext(c);
@@ -101,10 +131,14 @@ webchatPainel.put('/config/webchat', async (c) => {
   try {
     // Duas casas por um motivo: o nome do agente é identidade do produto inteiro
     // (WhatsApp, IA, sala de cotação leem a coluna); o resto é só do webchat.
-    await setAgentName(tenantId, parsed.data.agentName);
+    // A config vai PRIMEIRO: ela é versionada (dá pra ver e voltar). Se o nome
+    // falhar depois, o painel diz que não salvou e o nome antigo continua
+    // valendo em todos os canais — o oposto deixaria o agente renomeado por um
+    // salvamento que a tela declarou fracassado.
     await saveWebchatConfig(tenantId, parsed.data.webchat, {
       changedBy: auth.userId ?? undefined,
     });
+    await setAgentName(tenantId, parsed.data.agentName);
     clearWebchatCache(tenantId);
     return c.json({
       ok: true,
@@ -134,7 +168,7 @@ function baseUrlPublica(c: Context): string {
 }
 
 webchatPainel.get('/webchat/instalacao', async (c) => {
-  const denied = requirePanelAccess(c);
+  const denied = exigirGestor(c);
   if (denied) return denied;
 
   const auth = resolveAuthContext(c);

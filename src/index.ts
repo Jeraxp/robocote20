@@ -7,6 +7,7 @@ import { api } from './routes/api.js';
 import { ingest } from './routes/ingest.js';
 import { chat } from './routes/chat.js';
 import { webchat, webchatPainel } from './routes/webchat.js';
+import { resolveWebchatTenant } from './tenant/webchat.js';
 import { whatsapp } from './routes/whatsapp.js';
 import { getAssistantModelConfig } from './assistant/autoF1.js';
 import { getRagConfig } from './assistant/rag.js';
@@ -18,7 +19,20 @@ const app = new Hono();
 app.get('/', (c) => c.redirect('/public/index.html'));
 // O webchat é página nossa (o site da corretora embute por iframe) — nada de
 // redirect: URL estável é o que o cliente cola no site dele.
-app.get('/webchat', serveStatic({ path: './public/webchat/index.html' }));
+app.get('/webchat', async (c, next) => {
+  // frame-ancestors: quem pode EMBUTIR esta página. Sem isso, "domínios
+  // permitidos" no painel seria promessa sem dono — e um site de phishing
+  // serviria a jornada inteira com a marca da corretora.
+  const tenant = await resolveWebchatTenant(c.req.query('tenant'));
+  const permitidos = tenant?.config.allowedOrigins ?? [];
+  c.header(
+    'Content-Security-Policy',
+    permitidos.length
+      ? `frame-ancestors 'self' ${permitidos.map((h) => `https://${h} https://*.${h}`).join(' ')}`
+      : "frame-ancestors *",
+  );
+  return serveStatic({ path: './public/webchat/index.html' })(c, next);
+});
 app.get('/webchat.js', async (c, next) => {
   c.header('Cache-Control', 'public, max-age=300');
   c.header('Content-Type', 'application/javascript; charset=utf-8');

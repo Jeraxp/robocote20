@@ -70,6 +70,12 @@ export interface CoreInbound {
   timestamp: string;
   /** Detector: a corretora não foi identificada pela origem (ver Fase 2). */
   tenantUnresolved?: boolean;
+  /**
+   * Conversa de demonstração (o simulador do painel). Fato do canal que o motor
+   * precisa respeitar: não dispara cotação de verdade — na Segfy não existe
+   * ambiente de teste, toda cotação é real e conta pra corretora.
+   */
+  preview?: boolean;
 }
 
 /** O que o canal precisa fornecer ao motor. Hoje só uma coisa: como responder. */
@@ -298,6 +304,11 @@ async function triggerCalculate(
   inbound: CoreInbound,
   session: SessionState,
 ): Promise<{ guid: string; link: string; topReply: string } | null> {
+  if (inbound.preview) {
+    // Demonstração no painel: a Segfy não tem ambiente de teste — cotar aqui
+    // gastaria cotação real da corretora nas seguradoras.
+    return null;
+  }
   try {
     const ramo = ramoFromAnswers(session.answers);
     const result = ramo === 'residencial'
@@ -443,13 +454,24 @@ export async function runConversationTurn(
     const intent = parseServiceType(inbound.text);
 
     if (intent === 'atendimento') {
-      // Handoff humano — reutiliza o mecanismo de humanOverride (pausa o bot).
-      const reply = 'Perfeito! Vou chamar um atendente da nossa equipe pra te ajudar por aqui. Já já alguém responde. 🙋';
+      // Pausar o agente só faz sentido onde alguém pode assumir a conversa. No
+      // WhatsApp o operador responde pelo painel; no webchat não existe push —
+      // pausar ali deixaria o lead falando com o vazio por 24h. Então o pedido
+      // é registrado, o corretor vê no painel, e o agente segue coletando o
+      // contato: é o contato que permite ao humano retomar de fato.
+      const podeAssumir = inbound.channel === 'whatsapp';
+      const reply = podeAssumir
+        ? 'Perfeito! Vou chamar um atendente da nossa equipe pra te ajudar por aqui. Já já alguém responde. 🙋'
+        : 'Perfeito, já avisei nossa equipe de atendimento. 🙋\n\nPra um atendente falar com você, me diz por favor: qual é o seu nome e o melhor WhatsApp pra contato?';
       await deps.send(reply);
       const now = Date.now();
       const handoff: SessionState = {
         ...session,
-        humanOverride: { active: true, startedAt: now, lastActivityAt: now, source: 'lead_requested' },
+        stepId: podeAssumir ? session.stepId : 'name',
+        humanOverride: podeAssumir
+          ? { active: true, startedAt: now, lastActivityAt: now, source: 'lead_requested' }
+          : session.humanOverride,
+        pipelineStage: session.pipelineStage === 'novos_leads' ? 'contatados' : session.pipelineStage,
       };
       const persisted = await sessionStore.upsert(recordTurn(handoff, inbound, reply, 'human_handoff_requested'));
       return { replySent: reply, action: 'human_handoff_requested', sessionAfter: persisted };

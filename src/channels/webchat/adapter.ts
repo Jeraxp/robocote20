@@ -36,6 +36,8 @@ export interface WebchatTurnInput {
   text: string;
   /** Corretora dona do link. Ausente = cai no padrão e a sessão fica marcada. */
   tenantId?: string;
+  /** Demonstração no painel: o motor não dispara cotação real. */
+  preview?: boolean;
 }
 
 export interface WebchatTurnOutput {
@@ -72,6 +74,7 @@ export async function runWebchatTurn(
     text: input.text,
     timestamp: new Date().toISOString(),
     tenantUnresolved,
+    preview: input.preview,
   };
 
   const result = await runConversationTurn(inbound, {

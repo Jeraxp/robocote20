@@ -25,7 +25,7 @@ import {
   readWebchatSession,
 } from '../channels/webchat/adapter.js';
 import { planejarInterativo } from '../channels/whatsapp/interativo.js';
-import { resolveWebchatTenant } from '../tenant/webchat.js';
+import { resolveWebchatTenant, origemPermitida } from '../tenant/webchat.js';
 import {
   LIMITES_CHAT,
   limitarPorIp,
@@ -61,8 +61,9 @@ function conversaId(c: Context): string {
     return doHeader;
   }
 
+  // O cookie vira channelUserId (chave de linha no banco) — mesmo crivo do header.
   const existente = getCookie(c, CHAT_COOKIE)?.trim();
-  if (existente) {
+  if (existente && FORMATO_CONVERSA.test(existente)) {
     c.header(HEADER_CONVERSA, existente);
     return existente;
   }
@@ -77,6 +78,11 @@ function conversaId(c: Context): string {
     maxAge: 7 * 24 * 60 * 60,
   });
   return novo;
+}
+
+/** Demonstração do painel: o cliente pede, mas quem decide o efeito é o servidor. */
+function ehPreview(c: Context): boolean {
+  return c.req.query('preview') === '1' || c.req.header('x-rc-preview') === '1';
 }
 
 /** Corretora dona do link. */
@@ -103,6 +109,15 @@ async function exigirTenant(
   if (!tenant) {
     return { erro: c.json({ ok: false, error: 'canal indisponível' }, 404) };
   }
+  // Domínios permitidos: a tela promete ao corretor que só os sites dele
+  // carregam o chat. Promessa feita ao cliente tem que existir no código.
+  // O Origin do iframe é o NOSSO host (a página é nossa), então o que vale é o
+  // Referer da navegação; sem nenhum dos dois (curl, app), cai na lista também.
+  const origem = c.req.header('origin') || c.req.header('referer');
+  if (!origemPermitida(tenant.config, origem)) {
+    console.warn(`[webchat] origem recusada para ${tenant.tenantId}: ${origem ?? '(sem origem)'}`);
+    return { erro: c.json({ ok: false, error: 'canal indisponível' }, 404) };
+  }
   return { tenantId: tenant.tenantId };
 }
 
@@ -122,6 +137,7 @@ chat.post('/turn', async (c) => {
       conversationId: id,
       text: texto,
       tenantId: dono.tenantId,
+      preview: ehPreview(c),
     });
     return c.json({ ok: true, conversationId: id, ...resultado });
   } catch (e) {
@@ -145,7 +161,11 @@ chat.get('/session', async (c) => {
   const comChips = historico.map((h, i) => {
     if (i !== ultimoIdx) return h;
     const interativo = planejarInterativo(h.text);
-    return interativo ? { ...h, interativo } : h;
+    if (!interativo) return h;
+    // O texto tem que ser o MESMO que o lead viu ao vivo: com chips desenhados,
+    // o corpo já vem sem as linhas "1️⃣ …" — senão a retomada mostra o menu
+    // duas vezes, em texto e em botão.
+    return { ...h, text: interativo.corpo, interativo };
   });
   return c.json({ ok: true, conversationId: id, ...view, history: comChips });
 });
@@ -183,7 +203,7 @@ chat.post('/turn/stream', async (c) => {
   return streamSSE(c, async (stream) => {
     try {
       const resultado = await runWebchatTurn(
-        { conversationId: id, text: texto, tenantId },
+        { conversationId: id, text: texto, tenantId, preview: ehPreview(c) },
         async (fala) => {
           // Os mesmos botões do WhatsApp, desenhados como chips: o motor fala
           // texto e o planejador diz se aquela fala é uma escolha.

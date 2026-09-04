@@ -483,7 +483,20 @@ function parseYesNo(value: string): 'yes' | 'no' | null {
 function choiceFor(stepId: ActiveStepId, message: string): Choice | null {
   const choices = CHOICES[stepId] ?? [];
   const normalized = normalize(message);
-  return choices.find((choice) => normalize(choice.value) === normalized || choice.terms.some((term) => normalized.includes(normalize(term)))) ?? null;
+  return choices.find((choice) => normalize(choice.value) === normalized
+    || choice.terms.some((term) => contemTermo(normalized, normalize(term)))) ?? null;
+}
+
+/**
+ * Termo curto (até 3 letras) só casa como PALAVRA INTEIRA. O atalho 's' (de
+ * "sim") casava dentro de "pessoa": tocar "Outra pessoa" em "quem dirige?"
+ * virava "Sim, sou eu" e a seguradora recebia o condutor errado — dado errado
+ * que ninguém vê acontecer.
+ */
+function contemTermo(texto: string, termo: string): boolean {
+  if (!termo) return false;
+  if (termo.length > 3) return texto.includes(termo);
+  return new RegExp(`(^|[^a-z0-9])${termo}([^a-z0-9]|$)`).test(texto);
 }
 
 function isGenericVehicleModel(value: string): boolean {

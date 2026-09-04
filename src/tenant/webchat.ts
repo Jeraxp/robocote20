@@ -116,6 +116,25 @@ interface CacheEntry {
 }
 const cacheTenant = new Map<string, CacheEntry>();
 
+/**
+ * O cache é alimentado por rota PÚBLICA: qualquer string no formato de slug vira
+ * uma entrada (inclusive as negativas). Sem poda, um script derruba o processo
+ * por memória. Expira o que venceu e, no pior caso, corta o mais antigo.
+ */
+const CACHE_TETO = 500;
+
+function podarCache(): void {
+  const agora = Date.now();
+  for (const [chave, entrada] of cacheTenant) {
+    if (agora - entrada.fetchedAt > CACHE_TTL_MS) cacheTenant.delete(chave);
+  }
+  while (cacheTenant.size >= CACHE_TETO) {
+    const maisAntiga = cacheTenant.keys().next().value;
+    if (maisAntiga === undefined) break;
+    cacheTenant.delete(maisAntiga);
+  }
+}
+
 export function clearWebchatCache(tenantId?: string): void {
   if (!tenantId) {
     cacheTenant.clear();
@@ -230,6 +249,7 @@ export async function resolveWebchatTenant(
     tenant = registro && registro.status === 'active'
       ? { tenantId: registro.id, slug: registro.slug, nome: registro.name, config: await readWebchatConfig(registro.id) }
       : null;
+    podarCache();
     cacheTenant.set(chave, { value: tenant, fetchedAt: Date.now() });
   }
 
@@ -247,6 +267,36 @@ export async function getWebchatIdentidade(tenant: WebchatTenant): Promise<Webch
     cor: tenant.config.cor,
     saudacao: tenant.config.saudacao,
   };
+}
+
+/**
+ * O site que embute tem permissão? Lista vazia = qualquer um (é o default e a
+ * tela diz isso). Comparação por HOST: o corretor digita "corretora.com.br" e
+ * espera que valha para http/https e para qualquer caminho.
+ *
+ * `www.` é ignorado dos dois lados — ninguém entende por que o chat funciona em
+ * um e falha no outro. Subdomínio declarado vale para si e para os seus filhos.
+ */
+export function origemPermitida(config: WebchatConfig, origem: string | undefined | null): boolean {
+  const permitidos = config.allowedOrigins ?? [];
+  if (permitidos.length === 0) return true;
+  const host = hostDe(origem);
+  if (!host) return false;
+  return permitidos.some((p) => {
+    const alvo = normalizarHost(p);
+    if (!alvo) return false;
+    return host === alvo || host.endsWith(`.${alvo}`);
+  });
+}
+
+function hostDe(valor: string | undefined | null): string | null {
+  const bruto = valor?.trim();
+  if (!bruto) return null;
+  try {
+    return normalizarHost(new URL(bruto).host);
+  } catch {
+    return normalizarHost(bruto);
+  }
 }
 
 /** Só pra testes: esquece tudo que foi gravado em memória. */

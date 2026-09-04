@@ -465,7 +465,8 @@ function sanitizeAnswer(answer: SessionAnswer): { id: string; label: string; val
   const base = PANEL_LABELS[answer.id] ?? answer.label ?? answer.id;
   // Procedência visível: o corretor precisa saber o que o lead AFIRMOU e o que a
   // base respondeu pelo CEP — são coisas diferentes na hora de confirmar o risco.
-  const label = (answer.metadata as { source?: string } | undefined)?.source === 'lookup' ? `${base} (pelo CEP)` : base;
+  const source = (answer.metadata as { source?: string } | undefined)?.source;
+  const label = source === 'lookup' ? `${base} (pelo CEP)` : source === 'channel' ? `${base} (do WhatsApp)` : base;
   // Painel/Kanban é a interface do CORRETOR — ele precisa do dado REAL (CPF, telefone, CEP)
   // pra trabalhar o lead. Mascaramento PII fica só na conversa com o cliente. (Jera 2026-06-07)
   // CPF é gravado com value mascarado (657.***.***-90) e rawValue com o CPF real → devolve o real.

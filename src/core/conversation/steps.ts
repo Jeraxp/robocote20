@@ -190,6 +190,10 @@ function shouldSkipStep(stepId: StepId, answers: Record<string, { rawValue?: str
   if ((RES_ADDRESS_STEPS as readonly string[]).includes(stepId)) {
     return Boolean(answers[stepId]?.rawValue);
   }
+  // Contato já conhecido (no WhatsApp é o número da conversa) → não pergunta.
+  if (stepId === 'contact') {
+    return Boolean(answers.contact?.rawValue);
+  }
   if (stepId === 'main_driver_document') {
     return answers.is_main_driver?.rawValue === 'yes';
   }

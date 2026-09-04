@@ -50,12 +50,18 @@ async function fetchInsurers(
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.at < TTL_MS) return cached.insurers;
 
-  const res = await segfyPOST<{ data?: CompanyListItem[] }>(
+  const res = await segfyPOST<{ data?: CompanyListItem[]; status?: string; messages?: string }>(
     path,
     body,
     `company_list_${cacheKey}`,
     'body_config_token',
   );
+  if (!res.ok) {
+    // A causa real vai pro log (status + mensagem da Segfy). "Lista vazia" escondia
+    // um 401 "Api não autorizada" — token por produto — no 1º teste residencial.
+    const motivo = res.body?.messages || res.body?.status || 'sem detalhe';
+    throw new Error(`company-list ${cacheKey}: HTTP ${res.status} — ${motivo}`);
+  }
   const list = Array.isArray(res.body?.data) ? res.body.data : [];
   const insurers: InsurerOption[] = list
     .filter((c): c is CompanyListItem => Boolean(c && typeof c.name === 'string' && c.name.trim() && !c.inativo))

@@ -270,6 +270,30 @@ function rawAnswersFromSession(session: SessionState): Record<string, string> {
   return out;
 }
 
+/**
+ * Sessão nova. No WhatsApp o contato JÁ É o número da conversa — não se pergunta
+ * o que se sabe (decisão Jera 04/09): a pergunta "qual WhatsApp o corretor pode
+ * usar?" some deste canal e continua no webchat, onde o lead é anônimo.
+ * Procedência marcada (source: 'channel') — o painel mostra "(do WhatsApp)".
+ */
+function novaSessao(key: SessionKey, inbound: CoreInbound): SessionState {
+  const base = createInitialSessionState(key);
+  if (inbound.channel !== 'whatsapp') return base;
+  return {
+    ...base,
+    answers: {
+      ...base.answers,
+      contact: {
+        id: 'contact',
+        label: 'Contato',
+        value: inbound.userId,
+        rawValue: inbound.userId,
+        metadata: { source: 'channel' },
+      },
+    },
+  };
+}
+
 async function triggerCalculate(
   inbound: CoreInbound,
   session: SessionState,
@@ -320,7 +344,7 @@ export async function runConversationTurn(
   let session = await sessionStore.get(key);
   const isNew = !session;
   if (!session) {
-    session = await sessionStore.upsert(createInitialSessionState(key));
+    session = await sessionStore.upsert(novaSessao(key, inbound));
   }
 
   // Detector: a sessão carrega a marca de que a corretora não foi identificada.
@@ -395,7 +419,7 @@ export async function runConversationTurn(
   // Reset por palavra-chave — funciona em qualquer ponto. Após cotação concluída
   // também aceita "outra cotação"/"novo carro" pra evitar lead preso no "complete".
   if (isResetIntent(inbound.text, session.completed)) {
-    const fresh = createInitialSessionState(key);
+    const fresh = novaSessao(key, inbound);
     const ack = session.completed
       ? 'Beleza, vamos pra uma nova cotação então.'
       : 'Tudo bem, vamos começar do zero.';

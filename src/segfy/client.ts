@@ -37,31 +37,53 @@ interface SegfyRequestOptions {
   logName?: string;
 }
 
+/**
+ * A Segfy autoriza por PRODUTO: o token que cota veículo respondeu 401
+ * "Api não autorizada" em /api/residence/ no 1º teste real (03/09) — residencial
+ * é OUTRO token, confirmado pela Segfy. Um token por ramo quando existir;
+ * senão vale o da corretora. Lido na hora da chamada: chega por env sem restart.
+ */
+const TOKEN_POR_RAMO: Array<[string, string]> = [
+  ['/api/residence/', 'SEGFY_TOKEN_RESIDENCE'],
+  ['/api/life/', 'SEGFY_TOKEN_LIFE'],
+  ['/api/enterprise/', 'SEGFY_TOKEN_ENTERPRISE'],
+  ['/api/condominium/', 'SEGFY_TOKEN_CONDOMINIUM'],
+  ['/api/travel/', 'SEGFY_TOKEN_TRAVEL'],
+];
+
+export function tokenForPath(path: string): string {
+  for (const [prefixo, env] of TOKEN_POR_RAMO) {
+    if (path.includes(prefixo)) return process.env[env]?.trim() || CORRETORA_TOKEN;
+  }
+  return CORRETORA_TOKEN;
+}
+
 function withTokenInBody(
   bodyData: Record<string, unknown>,
   tokenTransport: TokenTransport,
+  token: string,
 ): Record<string, unknown> {
-  if (!CORRETORA_TOKEN) return bodyData;
+  if (!token) return bodyData;
   if (tokenTransport === 'body_corretora_token') {
-    return { ...bodyData, corretora_token: CORRETORA_TOKEN };
+    return { ...bodyData, corretora_token: token };
   }
   if (tokenTransport === 'body_token') {
-    return { ...bodyData, token: CORRETORA_TOKEN };
+    return { ...bodyData, token };
   }
   if (tokenTransport === 'body_config_token') {
     const config = typeof bodyData.config === 'object' && bodyData.config !== null ? bodyData.config : {};
-    return { ...bodyData, config: { ...config, token: CORRETORA_TOKEN } };
+    return { ...bodyData, config: { ...config, token } };
   }
   return bodyData;
 }
 
-function withTokenInQuery(url: URL, tokenTransport: TokenTransport): void {
-  if (!CORRETORA_TOKEN) return;
+function withTokenInQuery(url: URL, tokenTransport: TokenTransport, token: string): void {
+  if (!token) return;
   if (tokenTransport === 'query_corretora_token') {
-    url.searchParams.set('corretora_token', CORRETORA_TOKEN);
+    url.searchParams.set('corretora_token', token);
   }
   if (tokenTransport === 'query_token') {
-    url.searchParams.set('token', CORRETORA_TOKEN);
+    url.searchParams.set('token', token);
   }
 }
 
@@ -94,9 +116,10 @@ export async function segfyRequest<T = unknown>({
   for (const [key, value] of Object.entries(query)) {
     url.searchParams.set(key, String(value));
   }
-  withTokenInQuery(url, tokenTransport);
+  const token = tokenForPath(path);
+  withTokenInQuery(url, tokenTransport, token);
 
-  const payload = withTokenInBody(body, tokenTransport);
+  const payload = withTokenInBody(body, tokenTransport, token);
   const start = Date.now();
   const res = await fetch(url.toString(), {
     method,

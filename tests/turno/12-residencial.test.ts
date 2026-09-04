@@ -105,8 +105,7 @@ test('jornada inteira até o cálculo: o motor residencial recebe os valores cru
     'sim',             // res_owner
     'sim',             // res_new
     'novo',            // renewal_status
-    '48999998888',     // contact
-    'masculino',       // driver_sex
+    'masculino',       // driver_sex (contato não é perguntado: é o número da conversa)
     '12345678909',     // document
   ];
   let ultimo = null as Awaited<ReturnType<typeof processWhatsappTurn>> | null;

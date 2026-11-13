@@ -651,7 +651,7 @@ api.get('/jornadas/auto/f1', (c) =>
         type: 'choice',
         required: true,
         prompt: 'Tem garagem na residência?',
-        options: ['yes_with_electronic_gate', 'yes_no_electronic_gate', 'no_garage'],
+        options: ['yes_with_electronic_gate', 'yes_without_electronic_gate', 'no_garage'],
       },
       {
         id: 'marital_status',
@@ -659,7 +659,7 @@ api.get('/jornadas/auto/f1', (c) =>
         type: 'choice',
         required: true,
         prompt: 'Qual o estado civil?',
-        options: ['single', 'married', 'divorced', 'widowed'],
+        options: ['single', 'married', 'divorced', 'widower'],
       },
       {
         id: 'coverage',

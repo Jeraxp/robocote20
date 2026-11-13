@@ -140,7 +140,8 @@ function normalizeMaritalStatus(value: string): string {
   if (['single', 'solteiro', 'solteira'].some((m) => v.includes(m))) return 'single';
   if (['married', 'casado', 'casada', 'união'].some((m) => v.includes(m))) return 'married';
   if (['divorced', 'divorciad', 'separad'].some((m) => v.includes(m))) return 'divorced';
-  if (['widowed', 'viuv'].some((m) => v.includes(m))) return 'widowed';
+  // 'widow' cobre widowed/widower (legado); 'viúv' é o rótulo com acento, 'viuv' sem.
+  if (['widow', 'viuv', 'viúv'].some((m) => v.includes(m))) return 'widower';
   return 'married';
 }
 
@@ -194,8 +195,10 @@ function normalizeResidenceType(value: string): 'house' | 'apartment' {
 
 function normalizeGarage(value: string): string {
   const v = value.trim().toLowerCase();
-  if (v.includes('yes_with') || v.includes('eletr') || v === 'yes_with_electronic_gate') return 'yes_with_electronic_gate';
-  if (v.includes('yes_no') || v.includes('sem port')) return 'yes_no_electronic_gate';
+  // "sem portão" antes de "eletr": o rótulo 'Sim, sem portão eletrônico' também contém 'eletr'.
+  // 'yes_no' é o código legado de 'yes_without_electronic_gate'.
+  if (v.includes('yes_no') || v.includes('yes_without') || v.includes('sem port')) return 'yes_without_electronic_gate';
+  if (v.includes('yes_with') || v.includes('eletr')) return 'yes_with_electronic_gate';
   if (v.includes('no') && (v.includes('garage') || v.includes('garagem'))) return 'no_garage';
   if (v === 'no_garage') return 'no_garage';
   return 'yes_with_electronic_gate';

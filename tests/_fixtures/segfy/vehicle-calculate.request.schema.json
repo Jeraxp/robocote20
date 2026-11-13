@@ -1,0 +1,929 @@
+{
+  "type": "object",
+  "properties": {
+    "config": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string",
+          "title": "Token de identificação"
+        },
+        "insurers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "title": "Nome da Seguradora"
+              },
+              "commission": {
+                "type": "number",
+                "format": "double",
+                "title": "Comissão da Seguradora"
+              }
+            },
+            "required": [
+              "name",
+              "commission"
+            ]
+          }
+        },
+        "callback": {
+          "type": "string",
+          "title": "Url de retorno"
+        },
+        "reference": {
+          "type": "string",
+          "title": "Referência externa"
+        },
+        "extension_guid": {
+          "type": "string",
+          "title": "Id da extensão em execução"
+        },
+        "extension_version": {
+          "type": "string",
+          "title": "Id Versão da extensão instalada"
+        },
+        "connected_backup": {
+          "type": "string",
+          "title": "Flag que indica conexão de backup"
+        }
+      },
+      "required": [
+        "token",
+        "insurers"
+      ]
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "quotation_id": {
+          "type": "string",
+          "title": "Id da cotação atual utilizado para recálculos"
+        },
+        "quotation_date": {
+          "type": "string",
+          "format": "date",
+          "title": "Data da Cotação"
+        },
+        "validity_start": {
+          "type": "string",
+          "format": "date",
+          "title": "Início vigência "
+        },
+        "validity_end": {
+          "type": "string",
+          "format": "date",
+          "title": "Fim vigência"
+        },
+        "zip_code": {
+          "type": "string",
+          "title": "Cep de pernoite"
+        },
+        "customization": {
+          "type": "object",
+          "properties": {}
+        },
+        "advantages": {
+          "type": "object",
+          "properties": {}
+        },
+        "renewal": {
+          "type": "object",
+          "properties": {
+            "insurer": {
+              "enum": [
+                "ace",
+                "aig",
+                "hdi",
+                "new",
+                "rsa",
+                "alfa",
+                "azul",
+                "itau",
+                "sura",
+                "aliro",
+                "caixa",
+                "chubb",
+                "nobre",
+                "porto",
+                "sompo",
+                "suhai",
+                "tokio",
+                "youse",
+                "brasil",
+                "ituran",
+                "mapfre",
+                "mitsui",
+                "mutual",
+                "sancor",
+                "zurich",
+                "allianz",
+                "indiana",
+                "liberty",
+                "banestes",
+                "bradesco",
+                "centauro",
+                "cofianca",
+                "generali",
+                "santander",
+                "sul_america_cia_nacional",
+                "sul_america_cia_nacional_auto"
+              ],
+              "type": "string",
+              "description": "* `ace` - ACE SEGURADORA S/A\n* `aig` - AIG BRASIL CIA SEGUROS\n* `hdi` - HDI SEGUROS S/A\n* `new` - NOVO NEGÓCIO\n* `rsa` - RSA SEGUROS\n* `alfa` - ALFA SEGURADORA S/A\n* `azul` - AZUL SEGUROS S/A\n* `itau` - ITAÚ SEGUROS AUTOMOVEIS E RESIDENCIA\n* `sura` - SURA SEGURADORA\n* `aliro` - ALIRO SEGUROS\n* `caixa` - CAIXA SEGUROS\n* `chubb` - CHUBB DO BRASIL CIA DE SEGUROS\n* `nobre` - NOBRE SEGURADORA DO BRASIL S/A\n* `porto` - PORTO SEGURO CIA DE SEGUROS GERAIS\n* `sompo` - SOMPO SEGUROS S/A\n* `suhai` - SUHAI SEGUROS S/A\n* `tokio` - TOKIO MARINE SEGURADORA S/A\n* `youse` - YOUSE SEGURADORA S.A\n* `brasil` - BRASIL VEÍCULOS COMPANHIA DE SEGUROS\n* `ituran` - ITURAN SERVICOS LTDA\n* `mapfre` - MAPFRE VERA CRUZ SEGURADORA S/A\n* `mitsui` - MITSUI SUMITOMO SEGUROS S/A\n* `mutual` - COMPANHIA MUTUAL DE SEGUROS\n* `sancor` - SANCOR SEGUROS BRASIL S/A\n* `zurich` - ZURICH MINAS BRASIL SEGUROS S/A\n* `allianz` - ALLIANZ SEGUROS S/A\n* `indiana` - INDIANA SEGUROS S/A\n* `liberty` - LIBERTY SEGUROS S/A\n* `banestes` - BANESTES SEGUROS S/A.\n* `bradesco` - BRADESCO AUTO/RE COMPANHIA DE SEGUROS\n* `centauro` - CENTAURO SEGURADORA S/A\n* `cofianca` - CONFIANCA CIA DE SEGUROS\n* `generali` - GENERALI DO BRASIL CIA. NACIONAL DE SEGS\n* `santander` - SANTANDER SEGUROS S/A\n* `sul_america_cia_nacional` - SUL AMERICA CIA NACIONAL DE SEGUROS\n* `sul_america_cia_nacional_auto` - SUL AMERICA AUTOMOVEIS E MASSIFICADOS",
+              "title": "Seguradora Atual"
+            },
+            "proprio_corretor": {
+              "type": "boolean",
+              "title": "Deve ser informado se a apólice a ser renovada é do próprio corretor."
+            },
+            "bonus_last": {
+              "type": "string",
+              "title": "Classe de bônus Anterior"
+            },
+            "bonus_current": {
+              "type": "string",
+              "title": "Classe de bônus Futura"
+            },
+            "claim_amount": {
+              "type": "string",
+              "title": "Quantidade de Sinistros"
+            },
+            "prior_policy_end": {
+              "type": "string",
+              "title": "Data Final da Apólice Vigente"
+            },
+            "prior_policy": {
+              "type": "string",
+              "title": "Número da Apólice Vigente"
+            },
+            "prior_ic": {
+              "type": "string",
+              "title": "C.I Vigente"
+            },
+            "codigo_renovacao": {
+              "type": "string",
+              "title": "Código informado pela Cia nas Renovações Simplificadas."
+            },
+            "codigo_sucursal": {
+              "type": "string",
+              "title": "Código da Sucursal."
+            },
+            "item": {
+              "type": "string",
+              "title": "Item com dígito."
+            },
+            "origin_bonus": {
+              "type": "string",
+              "title": "Origem do bônus."
+            },
+            "transferencia_corretagem": {
+              "type": "boolean",
+              "title": "Indica se trata de seguro com transferência de corretagem."
+            }
+          },
+          "required": [
+            "insurer"
+          ]
+        },
+        "customer": {
+          "type": "object",
+          "properties": {
+            "social_name": {
+              "type": "string",
+              "title": "Nome social"
+            },
+            "document": {
+              "type": "string",
+              "title": "CPF/CNPJ"
+            },
+            "name": {
+              "type": "string",
+              "title": "Nome completo"
+            },
+            "birth_date": {
+              "type": "string",
+              "format": "date",
+              "title": "Data de Nascimento"
+            },
+            "email": {
+              "type": "string",
+              "title": "E-mail"
+            },
+            "cellphone": {
+              "type": "string",
+              "title": "Celular"
+            },
+            "sex": {
+              "enum": [
+                "male",
+                "female"
+              ],
+              "type": "string",
+              "description": "* `male` - Masculino\n* `female` - Feminino",
+              "title": "Sexo"
+            }
+          },
+          "required": [
+            "document",
+            "name"
+          ]
+        },
+        "main_driver": {
+          "type": "object",
+          "properties": {
+            "document": {
+              "type": "string",
+              "title": "CPF"
+            },
+            "name": {
+              "type": "string",
+              "title": "Nome completo"
+            },
+            "birth_date": {
+              "type": "string",
+              "format": "date",
+              "title": "Data de Nascimento"
+            },
+            "sex": {
+              "enum": [
+                "male",
+                "female"
+              ],
+              "type": "string",
+              "description": "* `male` - Masculino\n* `female` - Feminino",
+              "title": "Sexo"
+            },
+            "marital_status": {
+              "enum": [
+                "single",
+                "married",
+                "widower",
+                "divorced"
+              ],
+              "type": "string",
+              "description": "* `single` - Solteiro (a)\n* `married` - Casado (a) ou união estável\n* `widower` - Viúvo (a)\n* `divorced` - Divorciado (a)",
+              "title": "Estado Civil"
+            },
+            "relationship": {
+              "enum": [
+                "child",
+                "other",
+                "spouse",
+                "himself",
+                "parents",
+                "several",
+                "directors",
+                "exclusive",
+                "relatives",
+                "determined",
+                "undetermined"
+              ],
+              "type": "string",
+              "description": "* `child` - Filho\n* `other` - Outros\n* `spouse` - Cônjuge\n* `himself` - Próprio\n* `parents` - Pai/Mãe\n* `several` - Vários funcionários\n* `directors` - Sócios diretores\n* `exclusive` - Funcionário exclusivo\n* `relatives` - Cônjuge filho sócios\n* `determined` - Determinado\n* `undetermined` - Indeterminado",
+              "title": "Relação com o segurado"
+            },
+            "profession": {
+              "type": "string",
+              "title": "Profissão"
+            }
+          },
+          "required": [
+            "relationship"
+          ]
+        },
+        "vehicle": {
+          "type": "object",
+          "properties": {
+            "vehicle_type": {
+              "enum": [
+                "car",
+                "truck",
+                "motorcycle"
+              ],
+              "type": "string",
+              "description": "* `car` - Carro\n* `truck` - Caminhão\n* `motorcycle` - Moto",
+              "title": "Tipo do veículo"
+            },
+            "plate": {
+              "type": "string",
+              "title": "Placa"
+            },
+            "chassis": {
+              "type": "string",
+              "title": "Chassi (FIPE)"
+            },
+            "manufacture_year": {
+              "type": "number",
+              "title": "Ano Fabricação"
+            },
+            "model_year": {
+              "type": "number",
+              "title": "Ano Modelo"
+            },
+            "brand": {
+              "type": "string",
+              "title": "Marca"
+            },
+            "model": {
+              "type": "string",
+              "title": "Modelo"
+            },
+            "fipe_code": {
+              "type": "string",
+              "title": "Código FIPE"
+            },
+            "fipe_value": {
+              "type": "string",
+              "title": "Valor FIPE"
+            },
+            "circulation_zip_code": {
+              "type": "string",
+              "title": "CEP de circulação"
+            },
+            "category_type": {
+              "enum": [
+                "taxi",
+                "shops",
+                "winch",
+                "events",
+                "others",
+                "rental",
+                "school",
+                "funeral",
+                "policing",
+                "ambulance",
+                "food_truck",
+                "particular",
+                "firefighter",
+                "test_driver",
+                "manufacturer",
+                "app_transport",
+                "driving_school",
+                "cargo_transport",
+                "values_transport",
+                "garbage_collector",
+                "official_vehicles",
+                "employee_transport"
+              ],
+              "type": "string",
+              "description": "* `taxi` - Taxi\n* `shops` - Locadoras\n* `winch` - Guincho\n* `events` - Eventos\n* `others` - Outros\n* `rental` - Aluguel\n* `school` - Escolar\n* `funeral` - Funerário\n* `policing` - Policiamento\n* `ambulance` - Ambulância\n* `food_truck` - FoodTruck\n* `particular` - Particular\n* `firefighter` - Bombeiro\n* `test_driver` - Test Driver\n* `manufacturer` - Fabricante\n* `app_transport` - Transporte por APP\n* `driving_school` - Auto Escola\n* `cargo_transport` - Transporte Carga\n* `values_transport` - Transporte Valores\n* `garbage_collector` - Lixo\n* `official_vehicles` - Veículos Oficiais\n* `employee_transport` - Transporte Colaboradores",
+              "title": "Categoria do veículo"
+            },
+            "fuel_type": {
+              "enum": [
+                "flex",
+                "diesel",
+                "hybrid",
+                "alcohol",
+                "flex_cng",
+                "gasoline",
+                "electrical",
+                "alcohol_cng",
+                "gasoline_cng"
+              ],
+              "type": "string",
+              "description": "* `flex` - Flex\n* `diesel` - Diesel\n* `hybrid` - Hibrido\n* `alcohol` - Álcool\n* `flex_cng` - Flex/gnv\n* `gasoline` - Gasolina\n* `electrical` - Elétrico\n* `alcohol_cng` - Álcool/gnv\n* `gasoline_cng` - Gasolina/gnv",
+              "title": "Combustível"
+            },
+            "zero_km": {
+              "type": "boolean",
+              "title": "Zero Km"
+            },
+            "alienated": {
+              "type": "boolean",
+              "title": "Alienado"
+            },
+            "chassis_relabeled": {
+              "type": "boolean",
+              "title": "Chassi Remarcado"
+            },
+            "armored": {
+              "type": "boolean",
+              "title": "Blindado"
+            },
+            "gas_kit": {
+              "type": "boolean",
+              "title": "Kit gás"
+            },
+            "anti_theft": {
+              "type": "boolean",
+              "title": "Antifurto"
+            }
+          },
+          "required": [
+            "vehicle_type",
+            "manufacture_year",
+            "model_year",
+            "brand",
+            "model",
+            "fipe_code",
+            "fipe_value",
+            "category_type",
+            "fuel_type"
+          ]
+        },
+        "questionnaire": {
+          "type": "object",
+          "properties": {
+            "residence_garage": {
+              "enum": [
+                "no_garage",
+                "not_kept_in_garage",
+                "yes_with_electronic_gate",
+                "yes_without_electronic_gate"
+              ],
+              "type": "string",
+              "description": "* `no_garage` - Não possui\n* `not_kept_in_garage` - Não deixa em garagem\n* `yes_with_electronic_gate` - Sim, com portão eletrônico\n* `yes_without_electronic_gate` - Sim, sem portão eletrônico",
+              "title": "Garagem na residência"
+            },
+            "job_garage": {
+              "enum": [
+                "no",
+                "yes",
+                "does_not_use",
+                "does_not_work",
+                "not_kept_in_garage"
+              ],
+              "type": "string",
+              "description": "* `no` - Não, possui\n* `yes` - Sim, possui\n* `does_not_use` - Não utiliza para trabalhar\n* `does_not_work` - Não trabalha\n* `not_kept_in_garage` - Não deixa em garagem",
+              "title": "Garagem no trabalho"
+            },
+            "study_garage": {
+              "enum": [
+                "no",
+                "yes",
+                "does_not_use",
+                "does_not_study",
+                "not_kept_in_garage"
+              ],
+              "type": "string",
+              "description": "* `no` - Não, possui\n* `yes` - Sim, possui\n* `does_not_use` - Não utiliza para estudar\n* `does_not_study` - Não estuda\n* `not_kept_in_garage` - Não deixa em garagem",
+              "title": "Garagem no estudo"
+            },
+            "utilization_type": {
+              "enum": [
+                "job",
+                "both",
+                "hobby",
+                "personal",
+                "hobby_personal"
+              ],
+              "type": "string",
+              "description": "* `job` - Trabalho\n* `both` - Ambos\n* `hobby` - Lazer (Moto)\n* `personal` - Pessoal\n* `hobby_personal` - Lazer/Pessoal (Moto)",
+              "title": "Tipo de uso (veículo)"
+            },
+            "other_driver": {
+              "enum": [
+                "yes_both",
+                "yes_male",
+                "yes_female",
+                "does_not_exist",
+                "yes_does_not_use"
+              ],
+              "type": "string",
+              "description": "* `yes_both` - Sim, ambos os sexos\n* `yes_male` - Sim, do sexo feminino\n* `yes_female` - Sim, do sexo masculino\n* `does_not_exist` - Não residem\n* `yes_does_not_use` - Sim, mas não utilizam o veículo",
+              "title": "Reside com menores de 26 anos"
+            },
+            "secondary_driver_age": {
+              "enum": [
+                "age_25",
+                "age_18_to_24"
+              ],
+              "type": "string",
+              "description": "* `age_25` - 25 anos\n* `age_18_to_24` - De 18 a 24 anos",
+              "title": "Idate"
+            },
+            "monthly_km": {
+              "type": "number",
+              "format": "double",
+              "title": "Km Mensal"
+            },
+            "work_distance": {
+              "type": "number",
+              "format": "double",
+              "title": "Distância do trabalho"
+            },
+            "residence_type": {
+              "enum": [
+                "farm",
+                "house",
+                "other",
+                "apartment",
+                "condominium"
+              ],
+              "type": "string",
+              "description": "* `farm` - Chaçara\n* `house` - Casa\n* `other` - Outros\n* `apartment` - Apartamento\n* `condominium` - Casa em condomínio",
+              "title": "Tipo de residência"
+            },
+            "tax_exemption": {
+              "enum": [
+                "ipi",
+                "icms",
+                "ipi_icms",
+                "not_isent",
+                "pcd_isent",
+                "pcd_not_isent",
+                "not_applicable"
+              ],
+              "type": "string",
+              "description": "* `ipi` - IPI\n* `icms` - ICMS\n* `ipi_icms` - IPI/ICMS\n* `not_isent` - Sem Isenção\n* `pcd_isent` - PCD com isenção\n* `pcd_not_isent` - PCD sem isenção\n* `not_applicable` - Não se aplica",
+              "title": "Isenção Fiscal"
+            }
+          },
+          "required": [
+            "residence_garage",
+            "job_garage",
+            "study_garage",
+            "utilization_type",
+            "other_driver",
+            "monthly_km",
+            "work_distance",
+            "residence_type",
+            "tax_exemption"
+          ]
+        },
+        "questionnaire_truck": {
+          "type": "object",
+          "properties": {
+            "bodywork_type": {
+              "enum": [
+                "box",
+                "open",
+                "tank",
+                "mixer",
+                "stork",
+                "winch",
+                "closed",
+                "others",
+                "tilting",
+                "isothermal",
+                "uninformed",
+                "bulk_carrier",
+                "refrigerator",
+                "garbage_collector"
+              ],
+              "type": "string",
+              "description": "* `box` - Bau\n* `open` - Aberta\n* `tank` - Tanque\n* `mixer` - Betoneira\n* `stork` - Cegonha\n* `winch` - Guincho\n* `closed` - Fechada\n* `others` - Outros\n* `tilting` - Basculante\n* `isothermal` - Isotérmico\n* `uninformed` - Nao informado\n* `bulk_carrier` - Graneleira\n* `refrigerator` - Frigorifico\n* `garbage_collector` - Coletor de lixo",
+              "title": "Tipo da carroceria"
+            },
+            "bodywork_value": {
+              "type": "number",
+              "format": "double",
+              "title": "Valor da carroceria"
+            },
+            "cargo_insurance": {
+              "enum": [
+                "no",
+                "others",
+                "uninformed"
+              ],
+              "type": "string",
+              "description": "* `no` - Não\n* `others` - Outras\n* `uninformed` - Não Informado",
+              "title": "Seguro da carga transportada"
+            },
+            "circulation_area": {
+              "enum": [
+                "north",
+                "south",
+                "midwest",
+                "mercosul",
+                "northeast",
+                "southeast",
+                "undetermined",
+                "south_america",
+                "zip_code_state",
+                "sao_paulo_region",
+                "zip_code_surroundings"
+              ],
+              "type": "string",
+              "description": "* `north` - Norte\n* `south` - Sul\n* `midwest` - Centro-Oeste\n* `mercosul` - Mercosul\n* `northeast` - Nordeste\n* `southeast` - Sudeste\n* `undetermined` - Indeterminado\n* `south_america` - América do Sul\n* `zip_code_state` - Estado do CEP\n* `sao_paulo_region` - Região de São Paulo\n* `zip_code_surroundings` - Arredores do CEP",
+              "title": "Região de circulação do veículo"
+            },
+            "circulation_period": {
+              "enum": [
+                "daytime",
+                "nocturnal",
+                "uninformed",
+                "undetermined"
+              ],
+              "type": "string",
+              "description": "* `daytime` - Diurno\n* `nocturnal` - Noturno\n* `uninformed` - Não Informado\n* `undetermined` - Indeterminado",
+              "title": "Período de circulação do veículo"
+            },
+            "driver_part_franchise": {
+              "enum": [
+                "no",
+                "yes"
+              ],
+              "type": "string",
+              "description": "* `no` - Não\n* `yes` - Sim",
+              "title": "Participação na franquia"
+            },
+            "outside_service_garage": {
+              "enum": [
+                "no",
+                "yes"
+              ],
+              "type": "string",
+              "description": "* `no` - Não\n* `yes` - Sim",
+              "title": "Garagem/estacionamento quando não está em serviço"
+            },
+            "overnight_region": {
+              "enum": [
+                "gas_station",
+                "do_not_travel",
+                "service_station"
+              ],
+              "type": "string",
+              "description": "* `gas_station` - Posto de Combustível\n* `do_not_travel` - Não Viaja\n* `service_station` - Posto Autorizado",
+              "title": "Em caso de viagem, onde o veículo pernoita com mais frequência"
+            },
+            "main_load": {
+              "enum": [
+                "ore",
+                "beef",
+                "fuel",
+                "toys",
+                "wood",
+                "dairy",
+                "gases",
+                "glass",
+                "media",
+                "mixed",
+                "paper",
+                "tires",
+                "water",
+                "fabric",
+                "grains",
+                "others",
+                "garbage",
+                "plastic",
+                "removal",
+                "vesture",
+                "beverage",
+                "clothing",
+                "firearms",
+                "medicine",
+                "valuable",
+                "vehicles",
+                "cigarette",
+                "corrosive",
+                "flammable",
+                "foodstuff",
+                "furniture",
+                "gardening",
+                "live_load",
+                "sugarcane",
+                "auto_parts",
+                "hortifruti",
+                "animal_feed",
+                "electronics",
+                "radioactive",
+                "home_appliances",
+                "chemical_product",
+                "building_materials"
+              ],
+              "type": "string",
+              "description": "* `ore` - Minério\n* `beef` - Alimento Carne\n* `fuel` - Combustível\n* `toys` - Brinquedo\n* `wood` - Madeira\n* `dairy` - Alimento Laticínio\n* `gases` - Gases\n* `glass` - Vidros\n* `media` - Mídia\n* `mixed` - Carga Mista\n* `paper` - Papel\n* `tires` - Pneus\n* `water` - Água\n* `fabric` - Tecido\n* `grains` - Alimento Grãos\n* `others` - Outros\n* `garbage` - Lixo\n* `plastic` - Plástico\n* `removal` - Mudança\n* `vesture` - Vestuário\n* `beverage` - Bebidas\n* `clothing` - Confecções\n* `firearms` - Armas\n* `medicine` - Medicamento\n* `valuable` - Valores\n* `vehicles` - Veículo\n* `cigarette` - Cigarro\n* `corrosive` - Corrosivos\n* `flammable` - Inflamável\n* `foodstuff` - Gênero Alimentício\n* `furniture` - Móveis\n* `gardening` - Jardinagem\n* `live_load` - Carga Viva\n* `sugarcane` - Canavieiro\n* `auto_parts` - Auto Peça\n* `hortifruti` - Alimento Hortifruti\n* `animal_feed` - Ração Animal\n* `electronics` - Eletrônico\n* `radioactive` - Materiais Radioativos\n* `home_appliances` - Eletrodomésticos\n* `chemical_product` - Produto Químico\n* `building_materials` - Material de Construção",
+              "title": "Carga principal"
+            },
+            "monthly_km": {
+              "type": "number",
+              "format": "double",
+              "title": "Km Mensal"
+            },
+            "outsourcing_service": {
+              "enum": [
+                "no",
+                "yes"
+              ],
+              "type": "string",
+              "description": "* `no` - Não\n* `yes` - Sim",
+              "title": "Prestação de serviços a terceiros"
+            },
+            "risk_management": {
+              "enum": [
+                "none",
+                "others",
+                "uninformed",
+                "armed_escort",
+                "driver_registration"
+              ],
+              "type": "string",
+              "description": "* `none` - Nenhum\n* `others` - Outros\n* `uninformed` - Não Informado\n* `armed_escort` - Escolta Armada\n* `driver_registration` - Cadastro de Motorista",
+              "title": "Gerenciamento de risco"
+            }
+          },
+          "required": [
+            "bodywork_type",
+            "bodywork_value",
+            "cargo_insurance",
+            "circulation_area",
+            "circulation_period",
+            "driver_part_franchise",
+            "outside_service_garage",
+            "overnight_region",
+            "main_load",
+            "monthly_km",
+            "outsourcing_service",
+            "risk_management"
+          ]
+        },
+        "coverage": {
+          "type": "object",
+          "properties": {
+            "body_injuries": {
+              "type": "number",
+              "format": "double",
+              "title": "RCFV Danos Corporais"
+            },
+            "moral_damage": {
+              "type": "number",
+              "format": "double",
+              "title": "RCFV Danos Moraes"
+            },
+            "death_illness": {
+              "type": "number",
+              "format": "double",
+              "title": "APP morte/Invalidez"
+            },
+            "expense_extraordinary": {
+              "type": "number",
+              "format": "double",
+              "title": "Despesas Extras"
+            },
+            "coverage_type": {
+              "enum": [
+                "exclusive",
+                "comprehensive",
+                "third_party_only"
+              ],
+              "type": "string",
+              "description": "* `exclusive` - Exclusiva (Incêndio e roubo)\n* `comprehensive` - Compreensiva (Completa)\n* `third_party_only` - RCF (Somente terceiros)",
+              "title": "Tipo de cobertura"
+            },
+            "franchise": {
+              "enum": [
+                "normal",
+                "reduced_25",
+                "reduced_50",
+                "reduced_75",
+                "facultativa_50",
+                "facultativa_100"
+              ],
+              "type": "string",
+              "description": "* `normal` - Normal\n* `reduced_25` - Reduzida 25%\n* `reduced_50` - Reduzida 50%\n* `reduced_75` - Reduzida 75%\n* `facultativa_50` - facultativa 50%\n* `facultativa_100` - facultativa 100%",
+              "title": "Franquia"
+            },
+            "fipe_percentage": {
+              "type": "number",
+              "format": "double",
+              "title": "Fator tabela FIPE"
+            },
+            "assistance": {
+              "enum": [
+                "no_assistance",
+                "assistance_200_km_referenced",
+                "assistance_200_km_unattached",
+                "assistance_500_km_referenced",
+                "assistance_500_km_unattached",
+                "assistance_1000_km_referenced",
+                "assistance_1000_km_unattached",
+                "assistance_no_limit_referenced",
+                "assistance_no_limit_unattached"
+              ],
+              "type": "string",
+              "description": "* `no_assistance` - Sem Assistência 24Hrs\n* `assistance_200_km_referenced` - Até 200km - oficina referenciada\n* `assistance_200_km_unattached` - Até 200km - oficina livre\n* `assistance_500_km_referenced` - Até 500km - oficina referenciada\n* `assistance_500_km_unattached` - Até 500km - oficina livre\n* `assistance_1000_km_referenced` - Até 1000km - oficina referenciada\n* `assistance_1000_km_unattached` - Até 1000km - oficina livre\n* `assistance_no_limit_referenced` - Km ilimitado - oficina referenciada\n* `assistance_no_limit_unattached` - Km ilimitado - oficina livre",
+              "title": "Assistência 24h"
+            },
+            "glass": {
+              "enum": [
+                "no_glass",
+                "glass_vip_referenced",
+                "glass_vip_unattached",
+                "glass_basic_referenced",
+                "glass_basic_unattached",
+                "glass_total_referenced",
+                "glass_total_unattached"
+              ],
+              "type": "string",
+              "description": "* `no_glass` - Sem cobertura\n* `glass_vip_referenced` - VIP - oficina referenciada\n* `glass_vip_unattached` - VIP - oficina livre\n* `glass_basic_referenced` - Básico - oficina referenciada\n* `glass_basic_unattached` - Básico - oficina livre\n* `glass_total_referenced` - Completo - oficina referenciada\n* `glass_total_unattached` - Completo - oficina livre",
+              "title": "Vidros"
+            },
+            "rental_car": {
+              "enum": [
+                "no_car",
+                "rental_car_07_days_referenced",
+                "rental_car_07_days_unattached",
+                "rental_car_15_days_referenced",
+                "rental_car_15_days_unattached",
+                "rental_car_30_days_referenced",
+                "rental_car_30_days_unattached"
+              ],
+              "type": "string",
+              "description": "* `no_car` - Sem carro reserva\n* `rental_car_07_days_referenced` - 07 Diárias oficina referenciada\n* `rental_car_07_days_unattached` - 07 Diárias oficina livre\n* `rental_car_15_days_referenced` - 15 Diárias oficina referenciada\n* `rental_car_15_days_unattached` - 15 Diárias oficina livre\n* `rental_car_30_days_referenced` - 30 Diárias oficina referenciada\n* `rental_car_30_days_unattached` - 30 Diárias oficina livre",
+              "title": "Carro reserva (Diárias)"
+            },
+            "rental_car_profile": {
+              "enum": [
+                "basic",
+                "no_car",
+                "essential",
+                "executive"
+              ],
+              "type": "string",
+              "description": "* `basic` - Básico (1.0 sem AR)\n* `no_car` - Sem carro reserva\n* `essential` - Essencial (1.0 com AR)\n* `executive` - Executivo (1.4/1.6 com AR)",
+              "title": "Carro reserva (Veículo)"
+            },
+            "replacement_zero_km": {
+              "enum": [
+                "no_replacement",
+                "zero_km_06_month",
+                "zero_km_12_month"
+              ],
+              "type": "string",
+              "description": "* `no_replacement` - Sem cobertura\n* `zero_km_06_month` - 06 meses\n* `zero_km_12_month` - 12 meses",
+              "title": "Reposição Zero Km"
+            },
+            "material_damage": {
+              "type": "number",
+              "format": "double",
+              "title": "RCFV Danos Materiais"
+            },
+            "dmh": {
+              "type": "number",
+              "format": "double",
+              "title": "Despesas médicas hospitalares"
+            },
+            "gas_kit_value": {
+              "type": "number",
+              "format": "double",
+              "title": "Kit Gás"
+            },
+            "armored_value": {
+              "type": "number",
+              "format": "double",
+              "title": "Blindagem"
+            },
+            "exemption_franchise": {
+              "type": "boolean",
+              "title": "Isenção 1º Franquia"
+            },
+            "body_shop_repair": {
+              "type": "boolean",
+              "title": "Martelinho de ouro"
+            },
+            "quick_repairs": {
+              "type": "boolean",
+              "title": "Reparos rápidos"
+            },
+            "maxpar_coverages": {
+              "type": "object",
+              "properties": {
+                "bodywork_and_paint": {
+                  "type": "boolean",
+                  "title": "Lataria e Pintura"
+                },
+                "wheel_tire_and_suspension": {
+                  "type": "boolean",
+                  "title": "Roda, pneu e suspensão"
+                }
+              }
+            },
+            "lmi_residential": {
+              "type": "number",
+              "format": "double",
+              "title": "Limite Máximo de Indenização Residencial"
+            }
+          },
+          "required": [
+            "body_injuries",
+            "coverage_type",
+            "franchise",
+            "fipe_percentage",
+            "assistance",
+            "glass",
+            "material_damage"
+          ]
+        }
+      },
+      "required": [
+        "quotation_date",
+        "validity_start",
+        "validity_end",
+        "zip_code",
+        "customer",
+        "main_driver",
+        "vehicle",
+        "coverage"
+      ]
+    }
+  },
+  "required": [
+    "config",
+    "data"
+  ]
+}

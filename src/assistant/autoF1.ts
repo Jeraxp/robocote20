@@ -172,14 +172,14 @@ const CHOICES: Partial<Record<ActiveStepId, Choice[]>> = {
   ],
   residence_garage: [
     { label: 'Sim, com portão eletrônico', value: 'yes_with_electronic_gate', terms: ['eletronico', 'eletrônico', 'automatico', 'automático'] },
-    { label: 'Sim, sem portão eletrônico', value: 'yes_no_electronic_gate', terms: ['sem portao', 'sem portão', 'garagem sim', 'tenho garagem'] },
+    { label: 'Sim, sem portão eletrônico', value: 'yes_without_electronic_gate', terms: ['sem portao', 'sem portão', 'garagem sim', 'tenho garagem'] },
     { label: 'Não tenho', value: 'no_garage', terms: ['nao tenho', 'não tenho', 'rua', 'sem garagem'] },
   ],
   marital_status: [
     { label: 'Solteiro(a)', value: 'single', terms: ['solteiro', 'solteira'] },
     { label: 'Casado(a)', value: 'married', terms: ['casado', 'casada', 'uniao', 'união'] },
     { label: 'Divorciado(a)', value: 'divorced', terms: ['divorciado', 'divorciada', 'separado', 'separada'] },
-    { label: 'Viúvo(a)', value: 'widowed', terms: ['viuvo', 'viúvo', 'viuva', 'viúva'] },
+    { label: 'Viúvo(a)', value: 'widower', terms: ['viuvo', 'viúvo', 'viuva', 'viúva'] },
   ],
   coverage: [
     { label: 'Economia', value: 'Economia', terms: ['economia', 'barato', 'menor preço', 'menor preco'] },

@@ -128,4 +128,8 @@ test('rótulos do cliente e códigos legados caem nos códigos vivos do contrato
     assert.equal(montar({ residence_garage: garagem }).questionnaire.residence_garage, 'yes_without_electronic_gate', garagem);
   }
   assert.equal(montar({ residence_garage: 'Sim, com portão eletrônico' }).questionnaire.residence_garage, 'yes_with_electronic_gate');
+  // Sem garagem: o rótulo do botão é "Não tenho" (interativo.ts, assistant/autoF1.ts).
+  for (const garagem of ['Não tenho', 'não tenho', 'Nao tenho', 'Não', 'não', 'nao', 'sem garagem', 'Sem garagem', 'no_garage']) {
+    assert.equal(montar({ residence_garage: garagem }).questionnaire.residence_garage, 'no_garage', garagem);
+  }
 });

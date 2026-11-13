@@ -80,6 +80,8 @@ npm run dev:web
 | `GET /test/placa/:placa` | Stub: decode por placa não é premissa no Vehicle NJ |
 | `GET /test/condutor/:cpf` | Stub: lookup CPF existe em Residence, não em Vehicle NJ |
 
+As rotas `/test/*`, `POST /api/jornadas/auto/f1/cotacao`, `POST /api/assistente/auto/f1/mensagem` e `POST /api/assistente/rag/search` não pedem login. Elas só existem com `ROBOCOTE_ROTAS_DE_TESTE=1`, em desenvolvimento local; sem a variável, respondem 404.
+
 ## Segurança
 
 - Logs passam por redaction centralizada antes de gravar.

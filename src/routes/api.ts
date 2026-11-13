@@ -53,8 +53,14 @@ import { clearWhatsappAccountCache } from '../tenant/whatsappAccount.js';
 import { WhatsappNumberTakenError } from '../admin/store.js';
 import { buildRecapMessage, SERVICE_TYPE_QUESTION } from '../core/conversation/language.js';
 import { STEP_PROMPT, RESIDENCIAL_STEP_ORDER, applyRamoWording, ramoFromAnswers, type StepId } from '../core/conversation/steps.js';
+import { exigirRotasDeTeste } from './rotasDeTeste.js';
 
 export const api = new Hono();
+
+// Rotas avulsas sem login (cotação real e IA): só com ROBOCOTE_ROTAS_DE_TESTE=1.
+api.use('/jornadas/auto/f1/cotacao', exigirRotasDeTeste);
+api.use('/assistente/auto/f1/mensagem', exigirRotasDeTeste);
+api.use('/assistente/rag/search', exigirRotasDeTeste);
 
 // Resolve sessão real (login) e injeta AuthContext antes de qualquer handler.
 api.use('*', authMiddleware);

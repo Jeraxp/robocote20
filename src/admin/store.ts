@@ -247,9 +247,12 @@ export class InMemoryAdminStore implements AdminStore {
 
   async listUsers(auth: AuthContext, tenantId?: string): Promise<UserRecord[]> {
     const now = new Date().toISOString();
-    const scopedTenants = auth.isSuperadmin && !tenantId
+    // Defesa em profundidade: fora do superadmin, o escopo é sempre a própria corretora.
+    const target = auth.isSuperadmin ? tenantId : (auth.tenantId ?? undefined);
+    if (!auth.isSuperadmin && !target) return [];
+    const scopedTenants = auth.isSuperadmin && !target
       ? this.tenants
-      : this.tenants.filter((tenant) => tenant.id === (tenantId ?? auth.tenantId));
+      : this.tenants.filter((tenant) => tenant.id === target);
     const scopedTenantIds = new Set(scopedTenants.map((tenant) => tenant.id));
     const storedUsers = [...this.users.values()].filter((user) => !user.tenantId || scopedTenantIds.has(user.tenantId));
     const storedAdminTenantIds = new Set(storedUsers.filter((user) => user.role === 'admin' && user.tenantId).map((user) => user.tenantId));
@@ -483,8 +486,12 @@ export class PostgresAdminStore implements AdminStore {
   }
 
   async listUsers(auth: AuthContext, tenantId?: string): Promise<UserRecord[]> {
-    const pool = getPostgresPool();
-    if (auth.isSuperadmin && !tenantId) {
+    const pool = this.poolProvider();
+    // Defesa em profundidade: fora do superadmin, o escopo é sempre a própria corretora —
+    // um tenantId alheio vindo de cima é ignorado.
+    const target = auth.isSuperadmin ? tenantId : (auth.tenantId ?? undefined);
+    if (!auth.isSuperadmin && !target) return [];
+    if (auth.isSuperadmin && !target) {
       const result = await pool.query(`
         select u.*, 'superadmin' as role, null::text as tenant_id
         from users u
@@ -498,7 +505,6 @@ export class PostgresAdminStore implements AdminStore {
       return result.rows.map(rowUser);
     }
 
-    const target = tenantId ?? auth.tenantId;
     const result = await pool.query(`
       select u.*, tm.role, tm.tenant_id
       from users u

@@ -811,7 +811,11 @@ api.get('/admin/users', async (c) => {
   if (!canManageUsers(auth)) {
     return c.json({ ok: false, error: 'usuário sem permissão para gerenciar usuários' }, 403);
   }
-  const tenantId = c.req.query('tenantId') || auth.tenantId || undefined;
+  // Só superadmin escolhe corretora pela query — admin de A não lista os usuários de B
+  // (mesma regra da listagem de WhatsApp). Superadmin impersonando, sem query, fica na impersonada.
+  const tenantId = auth.isSuperadmin
+    ? (c.req.query('tenantId') || auth.tenantId || undefined)
+    : (auth.tenantId ?? undefined);
   return c.json({ ok: true, users: await adminStore.listUsers(auth, tenantId) });
 });
 

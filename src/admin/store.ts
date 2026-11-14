@@ -55,6 +55,16 @@ export interface CreateUserInput {
   passwordHash?: string;
 }
 
+/** Usuário cadastrado ou vinculado, mais a verdade sobre a senha enviada. */
+export interface CreatedUser extends UserRecord {
+  /**
+   * true só quando a senha enviada foi gravada: usuário novo, ou usuário que
+   * ainda não tinha senha (convidado). Quem já tem senha nunca é alterado, e aí
+   * é false — a senha enviada foi ignorada.
+   */
+  passwordSet: boolean;
+}
+
 export interface WhatsappInstanceRecord {
   id: string;
   tenantId: string;
@@ -74,6 +84,13 @@ export interface WhatsappInstanceRecord {
 }
 
 /** Número oficial já pertence a outra corretora — a rota traduz em 409. */
+export class EmailAlreadyRegisteredError extends Error {
+  constructor() {
+    super('e-mail já cadastrado');
+    this.name = 'EmailAlreadyRegisteredError';
+  }
+}
+
 export class WhatsappNumberTakenError extends Error {
   constructor(public readonly cloudPhoneNumberId: string) {
     super('este número já está cadastrado para outra corretora');
@@ -84,7 +101,15 @@ export class WhatsappNumberTakenError extends Error {
 export interface AdminStore {
   listTenants(auth: AuthContext): Promise<TenantRecord[]>;
   listUsers(auth: AuthContext, tenantId?: string): Promise<UserRecord[]>;
-  createUser(auth: AuthContext, input: CreateUserInput): Promise<UserRecord>;
+  /**
+   * Cadastra usuário novo ou, com e-mail já existente:
+   *  - quem chama não é superadmin → EmailAlreadyRegisteredError (nada muda);
+   *  - o existente é superadmin → EmailAlreadyRegisteredError (nada muda);
+   *  - o existente já tem senha → só o vínculo com a corretora; senha ignorada;
+   *  - o existente não tem senha (convidado, como o Admin criado com a corretora)
+   *    → vínculo + senha inicial, ativo e com troca obrigatória, como um usuário novo.
+   */
+  createUser(auth: AuthContext, input: CreateUserInput): Promise<CreatedUser>;
   createTenantWithManager(input: CreateTenantInput): Promise<CreateTenantResult>;
   listWhatsappInstances(auth: AuthContext, tenantId?: string): Promise<WhatsappInstanceRecord[]>;
   createWhatsappInstance(input: {
@@ -130,6 +155,8 @@ function slugify(value: string): string {
     .replace(/^-+|-+$/g, '')
     .slice(0, 52) || `corretora-${Date.now()}`;
 }
+
+const SUPERADMIN_EMAIL = 'admin@taskdun.com.br';
 
 function userIdFromEmail(email: string): string {
   return `user-${slugify(email.replace('@', '-at-'))}-${randomUUID().slice(0, 8)}`;
@@ -209,6 +236,8 @@ export class InMemoryAdminStore implements AdminStore {
   ];
 
   private readonly users = new Map<string, UserRecord>();
+  /** Senha por id de usuário (só existe aqui dentro; UserRecord nunca leva hash). */
+  private readonly senhas = new Map<string, { hash: string; trocaObrigatoria: boolean }>();
   private readonly whatsapp = new Map<string, WhatsappInstanceRecord>();
 
   async listTenants(auth: AuthContext): Promise<TenantRecord[]> {
@@ -218,9 +247,12 @@ export class InMemoryAdminStore implements AdminStore {
 
   async listUsers(auth: AuthContext, tenantId?: string): Promise<UserRecord[]> {
     const now = new Date().toISOString();
-    const scopedTenants = auth.isSuperadmin && !tenantId
+    // Defesa em profundidade: fora do superadmin, o escopo é sempre a própria corretora.
+    const target = auth.isSuperadmin ? tenantId : (auth.tenantId ?? undefined);
+    if (!auth.isSuperadmin && !target) return [];
+    const scopedTenants = auth.isSuperadmin && !target
       ? this.tenants
-      : this.tenants.filter((tenant) => tenant.id === (tenantId ?? auth.tenantId));
+      : this.tenants.filter((tenant) => tenant.id === target);
     const scopedTenantIds = new Set(scopedTenants.map((tenant) => tenant.id));
     const storedUsers = [...this.users.values()].filter((user) => !user.tenantId || scopedTenantIds.has(user.tenantId));
     const storedAdminTenantIds = new Set(storedUsers.filter((user) => user.role === 'admin' && user.tenantId).map((user) => user.tenantId));
@@ -255,7 +287,7 @@ export class InMemoryAdminStore implements AdminStore {
     return users.filter((user) => user.tenantId === auth.tenantId);
   }
 
-  async createUser(auth: AuthContext, input: CreateUserInput): Promise<UserRecord> {
+  async createUser(auth: AuthContext, input: CreateUserInput): Promise<CreatedUser> {
     if (!auth.isSuperadmin && auth.tenantId !== input.tenantId) {
       throw new Error('tenant fora do escopo do usuário');
     }
@@ -267,20 +299,52 @@ export class InMemoryAdminStore implements AdminStore {
     }
 
     const now = new Date().toISOString();
-    const existing = [...this.users.values()].find((user) => user.email === input.email && user.tenantId === input.tenantId);
+    const email = input.email.trim().toLowerCase();
+    // Cadastro nunca altera usuário existente (nem o superadmin embutido).
+    if (email === SUPERADMIN_EMAIL) throw new EmailAlreadyRegisteredError();
+    const stored = [...this.users.values()].find((user) => user.email === email);
+    const manager = this.tenants.find((tenant) => (tenant.managerEmail ?? '').toLowerCase() === email);
+    if ((stored || manager) && !auth.isSuperadmin) throw new EmailAlreadyRegisteredError();
+
+    if (stored) {
+      // Superadmin vincula usuário existente: só o vínculo muda, a linha do usuário não.
+      // Exceção única (mesma regra do Postgres): convidado SEM senha recebe a senha
+      // inicial, fica ativo e troca no 1º acesso. Quem já tem senha nunca é alterado.
+      let passwordSet = false;
+      if (input.passwordHash && !this.senhas.has(stored.id)) {
+        this.senhas.set(stored.id, { hash: input.passwordHash, trocaObrigatoria: true });
+        for (const [chave, u] of this.users) {
+          if (u.id === stored.id) this.users.set(chave, { ...u, status: 'active', updatedAt: now });
+        }
+        passwordSet = true;
+      }
+      const sameLink = [...this.users.entries()].find(([, u]) => u.email === email && u.tenantId === input.tenantId);
+      if (sameLink) {
+        const updated: UserRecord = { ...sameLink[1], role: input.role };
+        this.users.set(sameLink[0], updated);
+        return { ...updated, passwordSet };
+      }
+      const atual = passwordSet ? { ...stored, status: 'active' as const, updatedAt: now } : stored;
+      const linked: UserRecord = { ...atual, role: input.role, tenantId: input.tenantId };
+      this.users.set(`${stored.id}::${input.tenantId}`, linked);
+      return { ...linked, passwordSet };
+    }
+
+    // Com senha: nasce ativo, com troca obrigatória no 1º acesso (como no Postgres).
     const user: UserRecord = {
-      id: existing?.id ?? userIdFromEmail(input.email),
+      id: userIdFromEmail(email),
       name: input.name,
-      email: input.email,
+      email,
       phoneMasked: maskPhone(input.phone),
-      status: existing?.status === 'disabled' ? 'invited' : existing?.status ?? 'invited',
+      status: input.passwordHash ? 'active' : 'invited',
       role: input.role,
       tenantId: input.tenantId,
-      createdAt: existing?.createdAt ?? now,
+      createdAt: now,
       updatedAt: now,
     };
     this.users.set(user.id, user);
-    return user;
+    if (input.passwordHash) this.senhas.set(user.id, { hash: input.passwordHash, trocaObrigatoria: true });
+    return { ...user, passwordSet: Boolean(input.passwordHash) };
   }
 
   async createTenantWithManager(input: CreateTenantInput): Promise<CreateTenantResult> {
@@ -393,7 +457,10 @@ export class InMemoryAdminStore implements AdminStore {
   }
 }
 
-class PostgresAdminStore implements AdminStore {
+export class PostgresAdminStore implements AdminStore {
+  // Ponto de injeção só para testes; em produção usa o pool real.
+  constructor(private readonly poolProvider: () => ReturnType<typeof getPostgresPool> = getPostgresPool) {}
+
   async listTenants(auth: AuthContext): Promise<TenantRecord[]> {
     const pool = getPostgresPool();
     const select = `
@@ -419,8 +486,12 @@ class PostgresAdminStore implements AdminStore {
   }
 
   async listUsers(auth: AuthContext, tenantId?: string): Promise<UserRecord[]> {
-    const pool = getPostgresPool();
-    if (auth.isSuperadmin && !tenantId) {
+    const pool = this.poolProvider();
+    // Defesa em profundidade: fora do superadmin, o escopo é sempre a própria corretora —
+    // um tenantId alheio vindo de cima é ignorado.
+    const target = auth.isSuperadmin ? tenantId : (auth.tenantId ?? undefined);
+    if (!auth.isSuperadmin && !target) return [];
+    if (auth.isSuperadmin && !target) {
       const result = await pool.query(`
         select u.*, 'superadmin' as role, null::text as tenant_id
         from users u
@@ -434,7 +505,6 @@ class PostgresAdminStore implements AdminStore {
       return result.rows.map(rowUser);
     }
 
-    const target = tenantId ?? auth.tenantId;
     const result = await pool.query(`
       select u.*, tm.role, tm.tenant_id
       from users u
@@ -445,7 +515,7 @@ class PostgresAdminStore implements AdminStore {
     return result.rows.map(rowUser);
   }
 
-  async createUser(auth: AuthContext, input: CreateUserInput): Promise<UserRecord> {
+  async createUser(auth: AuthContext, input: CreateUserInput): Promise<CreatedUser> {
     if (!auth.isSuperadmin && auth.tenantId !== input.tenantId) {
       throw new Error('tenant fora do escopo do usuário');
     }
@@ -453,7 +523,7 @@ class PostgresAdminStore implements AdminStore {
       throw new Error('gestor só pode cadastrar operadores');
     }
 
-    const pool = getPostgresPool();
+    const pool = this.poolProvider();
     const client = await pool.connect();
     try {
       await client.query('begin');
@@ -461,23 +531,52 @@ class PostgresAdminStore implements AdminStore {
       const tenantCheck = await client.query('select 1 from tenants where id = $1 limit 1', [input.tenantId]);
       if (!tenantCheck.rowCount) throw new Error('corretora não encontrada');
 
-      const userId = userIdFromEmail(input.email);
-      // Com senha definida: usuário nasce 'active' + troca obrigatória no 1º acesso.
-      // Sem senha: comportamento legado ('invited', sem hash).
-      const initialStatus = input.passwordHash ? 'active' : 'invited';
-      const mustChange = Boolean(input.passwordHash);
-      const userResult = await client.query(`
-        insert into users (id, name, email, phone, status, password_hash, must_change_password)
-        values ($1, $2, $3, $4, $5, $6, $7)
-        on conflict (email) do update set
-          name = excluded.name,
-          phone = excluded.phone,
-          status = case when users.status = 'disabled' then excluded.status else users.status end,
-          password_hash = coalesce(excluded.password_hash, users.password_hash),
-          must_change_password = case when excluded.password_hash is not null then true else users.must_change_password end,
-          updated_at = now()
-        returning *
-      `, [userId, input.name, input.email, digitsOnly(input.phone ?? '') || null, initialStatus, input.passwordHash ?? null, mustChange]);
+      const email = input.email.trim().toLowerCase();
+      // Trava a linha existente: um cadastro concorrente não passa entre a checagem e a escrita.
+      const existing = await client.query('select * from users where email = $1 for update', [email]);
+      let userRow: Record<string, unknown>;
+      let passwordSet = false;
+      if (existing.rows.length) {
+        userRow = existing.rows[0];
+        const superCheck = await client.query('select 1 from superadmin_users where user_id = $1 limit 1', [userRow.id]);
+        // Cadastro nunca altera usuário existente. Superadmin só vincula usuário comum a uma corretora.
+        if (superCheck.rowCount || !auth.isSuperadmin) throw new EmailAlreadyRegisteredError();
+        // Exceção única: convidado SEM senha (como o Admin criado com a corretora, que nasce
+        // 'invited' e sem hash) recebe a senha inicial, fica ativo e troca no 1º acesso, como
+        // um usuário novo. Quem já tem senha nunca é alterado: a linha está travada pelo
+        // `for update` acima e o `password_hash is null` repete a condição no próprio UPDATE.
+        if (input.passwordHash && !userRow.password_hash) {
+          const ativado = await client.query(`
+            update users set
+              password_hash = $2,
+              status = 'active',
+              must_change_password = true,
+              updated_at = now()
+            where id = $1 and password_hash is null
+            returning *
+          `, [userRow.id, input.passwordHash]);
+          if (ativado.rows.length) {
+            userRow = ativado.rows[0];
+            passwordSet = true;
+          }
+        }
+      } else {
+        const userId = userIdFromEmail(email);
+        // Com senha definida: usuário nasce 'active' + troca obrigatória no 1º acesso.
+        // Sem senha: comportamento legado ('invited', sem hash).
+        const initialStatus = input.passwordHash ? 'active' : 'invited';
+        const mustChange = Boolean(input.passwordHash);
+        const inserted = await client.query(`
+          insert into users (id, name, email, phone, status, password_hash, must_change_password)
+          values ($1, $2, $3, $4, $5, $6, $7)
+          on conflict (email) do nothing
+          returning *
+        `, [userId, input.name, email, digitsOnly(input.phone ?? '') || null, initialStatus, input.passwordHash ?? null, mustChange]);
+        if (!inserted.rows.length) throw new EmailAlreadyRegisteredError();
+        userRow = inserted.rows[0];
+        passwordSet = Boolean(input.passwordHash);
+      }
+      const userResult = { rows: [userRow] };
 
       const createdId = String(userResult.rows[0].id);
       await client.query(`
@@ -489,14 +588,17 @@ class PostgresAdminStore implements AdminStore {
       await client.query(`
         insert into audit_events (tenant_id, actor_user_id, action, entity_type, entity_id, metadata)
         values ($1, $2, 'user.invite', 'user', $3, $4::jsonb)
-      `, [input.tenantId, auth.userId, createdId, JSON.stringify({ role: input.role, email: input.email })]);
+      `, [input.tenantId, auth.userId, createdId, JSON.stringify({ role: input.role, email: input.email, passwordSet })]);
 
       await client.query('commit');
-      return rowUser({
-        ...userResult.rows[0],
-        role: input.role,
-        tenant_id: input.tenantId,
-      });
+      return {
+        ...rowUser({
+          ...userResult.rows[0],
+          role: input.role,
+          tenant_id: input.tenantId,
+        }),
+        passwordSet,
+      };
     } catch (e) {
       await client.query('rollback');
       throw e;

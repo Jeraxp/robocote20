@@ -10,8 +10,12 @@ import { createCallbackId, postCalcular, type CalcularPayload } from '../segfy/c
 import { getResultado } from '../segfy/resultado.js';
 import { openSocket, closeSocket, listenFor, waitForSocketConnect } from '../segfy/socket.js';
 import { runTokenTransportDiagnostic } from '../segfy/diagnostico.js';
+import { exigirRotasDeTeste } from './rotasDeTeste.js';
 
 export const test = new Hono();
+
+// Console de teste: sem ROBOCOTE_ROTAS_DE_TESTE=1, nenhuma rota daqui existe.
+test.use('*', exigirRotasDeTeste);
 
 test.get('/auth', async (c) => {
   const refresh = c.req.query('refresh') === '1';

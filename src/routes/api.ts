@@ -53,8 +53,14 @@ import { clearWhatsappAccountCache } from '../tenant/whatsappAccount.js';
 import { WhatsappNumberTakenError } from '../admin/store.js';
 import { buildRecapMessage, SERVICE_TYPE_QUESTION } from '../core/conversation/language.js';
 import { STEP_PROMPT, RESIDENCIAL_STEP_ORDER, applyRamoWording, ramoFromAnswers, type StepId } from '../core/conversation/steps.js';
+import { exigirRotasDeTeste } from './rotasDeTeste.js';
 
 export const api = new Hono();
+
+// Rotas avulsas sem login (cotação real e IA): só com ROBOCOTE_ROTAS_DE_TESTE=1.
+api.use('/jornadas/auto/f1/cotacao', exigirRotasDeTeste);
+api.use('/assistente/auto/f1/mensagem', exigirRotasDeTeste);
+api.use('/assistente/rag/search', exigirRotasDeTeste);
 
 // Resolve sessão real (login) e injeta AuthContext antes de qualquer handler.
 api.use('*', authMiddleware);
@@ -645,7 +651,7 @@ api.get('/jornadas/auto/f1', (c) =>
         type: 'choice',
         required: true,
         prompt: 'Tem garagem na residência?',
-        options: ['yes_with_electronic_gate', 'yes_no_electronic_gate', 'no_garage'],
+        options: ['yes_with_electronic_gate', 'yes_without_electronic_gate', 'no_garage'],
       },
       {
         id: 'marital_status',
@@ -653,7 +659,7 @@ api.get('/jornadas/auto/f1', (c) =>
         type: 'choice',
         required: true,
         prompt: 'Qual o estado civil?',
-        options: ['single', 'married', 'divorced', 'widowed'],
+        options: ['single', 'married', 'divorced', 'widower'],
       },
       {
         id: 'coverage',
@@ -805,7 +811,11 @@ api.get('/admin/users', async (c) => {
   if (!canManageUsers(auth)) {
     return c.json({ ok: false, error: 'usuário sem permissão para gerenciar usuários' }, 403);
   }
-  const tenantId = c.req.query('tenantId') || auth.tenantId || undefined;
+  // Só superadmin escolhe corretora pela query — admin de A não lista os usuários de B
+  // (mesma regra da listagem de WhatsApp). Superadmin impersonando, sem query, fica na impersonada.
+  const tenantId = auth.isSuperadmin
+    ? (c.req.query('tenantId') || auth.tenantId || undefined)
+    : (auth.tenantId ?? undefined);
   return c.json({ ok: true, users: await adminStore.listUsers(auth, tenantId) });
 });
 
@@ -851,7 +861,8 @@ api.post('/admin/users', async (c) => {
 
   try {
     const passwordHash = password ? await hashPassword(password) : undefined;
-    const user = await adminStore.createUser(auth, {
+    // passwordSet vem do store: false quando o usuário já tinha senha e a enviada foi ignorada.
+    const { passwordSet, ...user } = await adminStore.createUser(auth, {
       tenantId,
       name,
       email,
@@ -859,7 +870,7 @@ api.post('/admin/users', async (c) => {
       role,
       passwordHash,
     });
-    return c.json({ ok: true, user, passwordSet: Boolean(passwordHash) }, 201);
+    return c.json({ ok: true, user, passwordSet }, 201);
   } catch (e) {
     return c.json({ ok: false, error: (e as Error).message }, 409);
   }

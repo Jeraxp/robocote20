@@ -69,14 +69,14 @@ export const OPCOES_POR_STEP: Partial<Record<StepId, Opcao[]>> = {
   ],
   residence_garage: [
     { id: 'yes_with_electronic_gate', titulo: 'Portão eletrônico' },
-    { id: 'yes_no_electronic_gate', titulo: 'Sem portão' },
+    { id: 'yes_without_electronic_gate', titulo: 'Sem portão' },
     { id: 'no_garage', titulo: 'Não tenho' },
   ],
   marital_status: [
     { id: 'single', titulo: 'Solteiro(a)' },
     { id: 'married', titulo: 'Casado(a)' },
     { id: 'divorced', titulo: 'Divorciado(a)' },
-    { id: 'widowed', titulo: 'Viúvo(a)' },
+    { id: 'widower', titulo: 'Viúvo(a)' },
   ],
   coverage: [
     { id: 'economia', titulo: 'Economia' },

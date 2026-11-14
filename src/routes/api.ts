@@ -857,7 +857,8 @@ api.post('/admin/users', async (c) => {
 
   try {
     const passwordHash = password ? await hashPassword(password) : undefined;
-    const user = await adminStore.createUser(auth, {
+    // passwordSet vem do store: false quando o usuário já tinha senha e a enviada foi ignorada.
+    const { passwordSet, ...user } = await adminStore.createUser(auth, {
       tenantId,
       name,
       email,
@@ -865,7 +866,7 @@ api.post('/admin/users', async (c) => {
       role,
       passwordHash,
     });
-    return c.json({ ok: true, user, passwordSet: Boolean(passwordHash) }, 201);
+    return c.json({ ok: true, user, passwordSet }, 201);
   } catch (e) {
     return c.json({ ok: false, error: (e as Error).message }, 409);
   }

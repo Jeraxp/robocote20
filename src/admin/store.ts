@@ -98,6 +98,22 @@ export class WhatsappNumberTakenError extends Error {
   }
 }
 
+/** Alvo da redefinição de senha não existe para quem pede — a rota traduz em 404. */
+export class UserNotFoundError extends Error {
+  constructor() {
+    super('usuário não encontrado');
+    this.name = 'UserNotFoundError';
+  }
+}
+
+/** Redefinição de senha recusada; `status` é o HTTP que a rota devolve. */
+export class PasswordResetNotAllowedError extends Error {
+  constructor(public readonly status: 400 | 403 | 409, message: string) {
+    super(message);
+    this.name = 'PasswordResetNotAllowedError';
+  }
+}
+
 export interface AdminStore {
   listTenants(auth: AuthContext): Promise<TenantRecord[]>;
   listUsers(auth: AuthContext, tenantId?: string): Promise<UserRecord[]>;
@@ -110,6 +126,13 @@ export interface AdminStore {
    *    → vínculo + senha inicial, ativo e com troca obrigatória, como um usuário novo.
    */
   createUser(auth: AuthContext, input: CreateUserInput): Promise<CreatedUser>;
+  /**
+   * Redefine a senha de outro usuário (botão "Redefinir senha" em Usuários): grava
+   * o hash, exige troca no próximo acesso, ativa convidado e derruba as sessões
+   * do alvo. Quem pode redefinir quem é decidido AQUI (ver `decidirRedefinicao`);
+   * a rota só traduz UserNotFoundError e PasswordResetNotAllowedError.
+   */
+  resetUserPassword(auth: AuthContext, userId: string, passwordHash: string): Promise<void>;
   createTenantWithManager(input: CreateTenantInput): Promise<CreateTenantResult>;
   listWhatsappInstances(auth: AuthContext, tenantId?: string): Promise<WhatsappInstanceRecord[]>;
   createWhatsappInstance(input: {
@@ -215,6 +238,61 @@ function rowWhatsapp(row: Record<string, unknown>): WhatsappInstanceRecord {
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
   };
+}
+
+interface VinculoDoAlvo {
+  tenantId: string;
+  role: string;
+}
+
+interface AlvoDaRedefinicao {
+  exists: boolean;
+  isSuperadmin: boolean;
+  status: string | null;
+  memberships: VinculoDoAlvo[];
+}
+
+const SO_O_SUPORTE = 'só o suporte pode redefinir a senha deste usuário';
+
+/**
+ * Quem pode redefinir a senha de quem — a mesma regra para os dois stores. Lança
+ * o erro tipado da recusa; retorna sem nada quando pode.
+ *
+ * Ordem: superadmin-alvo e o próprio usuário antes de tudo; depois o escopo de
+ * quem chama (404 para quem não é da corretora dele, sem revelar que existe em
+ * outra); só então "desativado", para não vazar o status de usuário alheio.
+ */
+function decidirRedefinicao(auth: AuthContext, userId: string, alvo: AlvoDaRedefinicao): void {
+  if (!auth.isSuperadmin && auth.role !== 'admin') {
+    throw new PasswordResetNotAllowedError(403, 'usuário sem permissão para gerenciar usuários');
+  }
+  if (alvo.isSuperadmin) {
+    throw new PasswordResetNotAllowedError(403, 'a senha do superadmin não é redefinida por aqui');
+  }
+  if (userId === auth.userId) {
+    throw new PasswordResetNotAllowedError(400, 'para trocar a sua própria senha, use "Trocar senha"');
+  }
+  if (!alvo.exists) throw new UserNotFoundError();
+  if (!auth.isSuperadmin) {
+    // Admin de corretora: só quem ele mesmo poderia cadastrar (operador) e que não
+    // entra em nenhuma outra corretora — redefinir esse seria entrar na outra.
+    if (!auth.tenantId || !alvo.memberships.some((m) => m.tenantId === auth.tenantId)) {
+      throw new UserNotFoundError();
+    }
+    const unico = alvo.memberships.length === 1 ? alvo.memberships[0] : null;
+    if (!unico || unico.tenantId !== auth.tenantId || unico.role !== 'operador') {
+      throw new PasswordResetNotAllowedError(403, SO_O_SUPORTE);
+    }
+  }
+  if (alvo.status === 'disabled') {
+    throw new PasswordResetNotAllowedError(409, 'usuário desativado');
+  }
+}
+
+/** Papel do alvo para a auditoria: o de maior poder entre os vínculos (null sem vínculo). */
+function papelDoAlvo(memberships: VinculoDoAlvo[]): string | null {
+  if (!memberships.length) return null;
+  return memberships.some((m) => m.role === 'admin') ? 'admin' : 'operador';
 }
 
 export class InMemoryAdminStore implements AdminStore {
@@ -345,6 +423,27 @@ export class InMemoryAdminStore implements AdminStore {
     this.users.set(user.id, user);
     if (input.passwordHash) this.senhas.set(user.id, { hash: input.passwordHash, trocaObrigatoria: true });
     return { ...user, passwordSet: Boolean(input.passwordHash) };
+  }
+
+  async resetUserPassword(auth: AuthContext, userId: string, passwordHash: string): Promise<void> {
+    // Mesmas regras do Postgres. Aqui cada vínculo é uma entrada do mapa `users`;
+    // o superadmin embutido ('taskdun-superadmin') e o Admin de exemplo de cada
+    // corretora não são guardados, então o primeiro é superadmin e o segundo não existe.
+    const entradas = [...this.users.entries()].filter(([, u]) => u.id === userId);
+    decidirRedefinicao(auth, userId, {
+      exists: entradas.length > 0,
+      isSuperadmin: userId === 'taskdun-superadmin' || entradas.some(([, u]) => u.email === SUPERADMIN_EMAIL),
+      status: entradas[0]?.[1].status ?? null,
+      memberships: entradas
+        .filter(([, u]) => u.tenantId)
+        .map(([, u]) => ({ tenantId: String(u.tenantId), role: u.role })),
+    });
+    const now = new Date().toISOString();
+    this.senhas.set(userId, { hash: passwordHash, trocaObrigatoria: true });
+    for (const [chave, u] of entradas) {
+      this.users.set(chave, { ...u, status: u.status === 'invited' ? 'active' : u.status, updatedAt: now });
+    }
+    // Sem sessões em memória: nada a derrubar.
   }
 
   async createTenantWithManager(input: CreateTenantInput): Promise<CreateTenantResult> {
@@ -599,6 +698,56 @@ export class PostgresAdminStore implements AdminStore {
         }),
         passwordSet,
       };
+    } catch (e) {
+      await client.query('rollback');
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  async resetUserPassword(auth: AuthContext, userId: string, passwordHash: string): Promise<void> {
+    const pool = this.poolProvider();
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+      // Trava a linha do alvo: um cadastro concorrente (que trava a mesma linha para
+      // vincular o usuário a outra corretora) não passa entre a checagem e a escrita.
+      const linha = await client.query('select id, status from users where id = $1 for update', [userId]);
+      const superCheck = await client.query('select 1 from superadmin_users where user_id = $1 limit 1', [userId]);
+      const vinculos = await client.query('select tenant_id, role from tenant_memberships where user_id = $1', [userId]);
+      const memberships = vinculos.rows.map((r) => ({ tenantId: String(r.tenant_id), role: String(r.role) }));
+      decidirRedefinicao(auth, userId, {
+        exists: linha.rows.length > 0,
+        isSuperadmin: Boolean(superCheck.rowCount),
+        status: linha.rows[0] ? String(linha.rows[0].status) : null,
+        memberships,
+      });
+
+      await client.query(`
+        update users set
+          password_hash = $2,
+          must_change_password = true,
+          status = case when status = 'invited' then 'active' else status end,
+          updated_at = now()
+        where id = $1 and status <> 'disabled'
+      `, [userId, passwordHash]);
+      // Quem estava logado com a senha antiga sai.
+      await client.query('delete from auth_sessions where user_id = $1', [userId]);
+      await client.query(`
+        insert into audit_events (tenant_id, actor_user_id, action, entity_type, entity_id, metadata)
+        values ($1, $2, $3, $4, $5, $6::jsonb)
+      `, [
+        memberships.length === 1 ? memberships[0].tenantId : null,
+        auth.userId,
+        'user.password_reset',
+        'user',
+        userId,
+        // Só papéis: nada de e-mail, senha ou hash.
+        JSON.stringify({ actorRole: auth.isSuperadmin ? 'superadmin' : auth.role, targetRole: papelDoAlvo(memberships) }),
+      ]);
+
+      await client.query('commit');
     } catch (e) {
       await client.query('rollback');
       throw e;

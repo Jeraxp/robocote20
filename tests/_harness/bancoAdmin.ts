@@ -26,6 +26,8 @@ export interface BancoAdmin {
   memberships: Map<string, Linha>;
   tenants: Map<string, Linha>;
   sessions: Map<string, Linha>;
+  /** Linhas gravadas em audit_events (na ordem). */
+  auditoria: Linha[];
   consultas: Array<{ sql: string; params: unknown[] }>;
 }
 
@@ -39,6 +41,7 @@ export function criarBancoAdmin(): BancoAdmin {
   const memberships = new Map<string, Linha>();
   const tenants = new Map<string, Linha>();
   const sessions = new Map<string, Linha>();
+  const auditoria: Linha[] = [];
   const consultas: Array<{ sql: string; params: unknown[] }> = [];
 
   const ok = (rows: Linha[]): Resultado => ({ rows, rowCount: rows.length });
@@ -108,6 +111,35 @@ export function criarBancoAdmin(): BancoAdmin {
       return ok([u]);
     }
 
+    // ─── redefinir senha (resetUserPassword) ───────────────────────────────
+    if (q.startsWith('select id, status from users where id = $1') && q.endsWith('for update')) {
+      const u = users.get(String(p[0]));
+      return ok(u ? [{ id: u.id, status: u.status }] : []);
+    }
+    if (q === 'select tenant_id, role from tenant_memberships where user_id = $1') {
+      return ok([...memberships.values()].filter((m) => m.user_id === p[0]).map((m) => ({ tenant_id: m.tenant_id, role: m.role })));
+    }
+    if (q.startsWith('update users set password_hash = $2, must_change_password = true,')) {
+      const u = users.get(String(p[0]));
+      if (!u) return ok([]);
+      // Status: convidado vira ativo; nada além disso (o SQL real diz o mesmo com `case`).
+      const ativaConvidado = q.includes("status = case when status = 'invited' then 'active' else status end");
+      const recusaDesativado = q.includes("and status <> 'disabled'");
+      if (recusaDesativado && u.status === 'disabled') return ok([]);
+      Object.assign(u, {
+        password_hash: p[1],
+        must_change_password: true,
+        status: ativaConvidado && u.status === 'invited' ? 'active' : u.status,
+        updated_at: agora,
+      });
+      return ok([u]);
+    }
+    if (q === 'delete from auth_sessions where user_id = $1') {
+      let n = 0;
+      for (const [id, s] of sessions) if (s.user_id === p[0]) { sessions.delete(id); n += 1; }
+      return { rows: [], rowCount: n };
+    }
+
     // ─── vínculos e auditoria ───────────────────────────────────────────────
     if (q.startsWith('insert into tenant_memberships')) {
       // createUser manda o papel em $3; createTenantWithManager usa 'admin' literal.
@@ -115,7 +147,14 @@ export function criarBancoAdmin(): BancoAdmin {
       memberships.set(`${p[0]}|${p[1]}`, { user_id: p[0], tenant_id: p[1], role });
       return ok([]);
     }
-    if (q.startsWith('insert into audit_events')) return ok([]);
+    if (q.startsWith('insert into audit_events')) {
+      // Forma com 6 parâmetros (tenant, ator, ação, tipo, id, metadata); as outras
+      // (ação literal no SQL) ficam guardadas como vieram.
+      auditoria.push(p.length === 6 && q.includes('values ($1, $2, $3, $4, $5, $6::jsonb)')
+        ? { tenant_id: p[0], actor_user_id: p[1], action: p[2], entity_type: p[3], entity_id: p[4], metadata: JSON.parse(String(p[5])) }
+        : { sql: q, params: p });
+      return ok([]);
+    }
 
     // ─── listagem de usuários ───────────────────────────────────────────────
     if (q.startsWith('select u.*, tm.role, tm.tenant_id from users u join tenant_memberships tm')
@@ -139,8 +178,27 @@ export function criarBancoAdmin(): BancoAdmin {
       }]);
     }
     if (q.startsWith('insert into auth_sessions')) {
-      sessions.set(String(p[0]), { id: p[0], user_id: p[1] });
+      sessions.set(String(p[0]), { id: p[0], user_id: p[1], acting_as_tenant_id: null, last_seen_at: agora });
       return ok([]);
+    }
+    if (q.startsWith('select s.id as session_id, s.acting_as_tenant_id, s.last_seen_at')
+      && q.includes('where s.id = $1 and s.expires_at > now()')) {
+      // resolveSession: sessão + usuário + primeiro vínculo (como o `limit 1` do SQL real).
+      const s = sessions.get(String(p[0]));
+      const u = s ? users.get(String(s.user_id)) : undefined;
+      if (!s || !u) return ok([]);
+      const vinculo = [...memberships.values()].find((m) => m.user_id === u.id);
+      return ok([{
+        session_id: s.id, acting_as_tenant_id: s.acting_as_tenant_id ?? null, last_seen_at: s.last_seen_at ?? agora,
+        user_id: u.id, name: u.name, email: u.email, status: u.status,
+        must_change_password: Boolean(u.must_change_password), is_superadmin: supers.has(String(u.id)),
+        tenant_id: vinculo?.tenant_id ?? null, role: vinculo?.role ?? null,
+      }]);
+    }
+    if (q === 'select name from tenants where id = $1') {
+      // getTenantName (nome da corretora na sessão).
+      const t = tenants.get(String(p[0]));
+      return ok(t ? [{ name: t.name }] : []);
     }
 
     throw new Error(`consulta não prevista no dublê: ${q}`);
@@ -153,6 +211,7 @@ export function criarBancoAdmin(): BancoAdmin {
     memberships,
     tenants,
     sessions,
+    auditoria,
     consultas,
   };
 }

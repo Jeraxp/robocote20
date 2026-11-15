@@ -13,6 +13,7 @@ import {
   ChevronDown,
   Copy,
   Home,
+  KeyRound,
   X,
   Clock3,
   ExternalLink,
@@ -394,6 +395,15 @@ async function createAdminUser(input: UserForm, token: string): Promise<AdminUse
   });
   const body = await parsePanelResponse<{ ok: true; user: AdminUser }>(response, 'Não foi possível criar usuário.');
   return body.user;
+}
+
+/** Redefine a senha de um usuário; a senha temporária volta só nesta resposta. */
+async function resetAdminUserPassword(userId: string, token: string): Promise<string> {
+  const response = await panelFetch(`/api/admin/users/${encodeURIComponent(userId)}/reset-password`, token, {
+    method: 'POST',
+  });
+  const body = await parsePanelResponse<{ ok: true; temporaryPassword: string }>(response, 'Não foi possível redefinir a senha.');
+  return body.temporaryPassword;
 }
 
 async function fetchWhatsappInstances(token: string): Promise<AdminWhatsappInstance[]> {
@@ -1305,6 +1315,7 @@ function UsersSection({
   onChange,
   onSubmit,
   onRefresh,
+  onResetPassword,
 }: {
   admin: AdminMeResponse | null;
   tenants: AdminTenant[];
@@ -1316,10 +1327,63 @@ function UsersSection({
   onChange: (values: UserForm) => void;
   onSubmit: () => void;
   onRefresh: () => void;
+  /** Pede a redefinição ao servidor; devolve a senha temporária ou lança com a mensagem dele. */
+  onResetPassword: (userId: string) => Promise<string>;
 }): JSX.Element {
   const isSuperadmin = admin?.auth.isSuperadmin ?? false;
   const update = (key: keyof UserForm, value: string): void => {
     onChange({ ...values, [key]: value });
+  };
+
+  // Redefinir senha: confirmação na página, depois a senha temporária uma única vez.
+  const [confirmando, setConfirmando] = useState<AdminUser | null>(null);
+  const [redefinindo, setRedefinindo] = useState(false);
+  const [erroRedefinir, setErroRedefinir] = useState<string | null>(null);
+  const [senhaTemporaria, setSenhaTemporaria] = useState<{ nome: string; senha: string } | null>(null);
+  const [copiado, setCopiado] = useState(false);
+  const avisoRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (confirmando || senhaTemporaria) avisoRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+  }, [confirmando, senhaTemporaria]);
+
+  // O servidor é quem decide; o botão só aparece onde a regra deixa.
+  const podeRedefinir = (user: AdminUser): boolean => {
+    if (user.role === 'superadmin' || user.id === admin?.auth.userId) return false;
+    return isSuperadmin || user.role === 'operador';
+  };
+
+  const pedirRedefinicao = (user: AdminUser): void => {
+    setSenhaTemporaria(null);
+    setCopiado(false);
+    setErroRedefinir(null);
+    setConfirmando(user);
+  };
+
+  const confirmarRedefinicao = async (): Promise<void> => {
+    if (!confirmando) return;
+    setRedefinindo(true);
+    setErroRedefinir(null);
+    try {
+      const senha = await onResetPassword(confirmando.id);
+      setSenhaTemporaria({ nome: confirmando.name, senha });
+      setConfirmando(null);
+      onRefresh();
+    } catch (e) {
+      setErroRedefinir((e as Error).message);
+    } finally {
+      setRedefinindo(false);
+    }
+  };
+
+  const fecharSenha = (): void => {
+    setSenhaTemporaria(null);
+    setCopiado(false);
+  };
+
+  const copiarSenha = async (): Promise<void> => {
+    if (!senhaTemporaria) return;
+    setCopiado(await copiarParaAreaDeTransferencia(senhaTemporaria.senha));
   };
 
   return (
@@ -1334,6 +1398,73 @@ function UsersSection({
           Atualizar
         </button>
       </header>
+
+      {confirmando ? (
+        <section
+          className="panel-surface admin-create-card"
+          role="alertdialog"
+          aria-labelledby="redefinir-senha-titulo"
+          ref={(el) => { avisoRef.current = el; }}
+        >
+          <div className="admin-card-header">
+            <div>
+              <strong id="redefinir-senha-titulo">Redefinir senha</strong>
+              <span>{confirmando.email}</span>
+            </div>
+          </div>
+          <div className="admin-create-form">
+            <p className="manual-lead-wide">
+              Redefinir a senha de {confirmando.name}? A senha atual deixa de valer e a pessoa é desconectada.
+            </p>
+            {erroRedefinir ? <p className="manual-lead-error">{erroRedefinir}</p> : null}
+            <div className="manual-lead-actions">
+              <button type="button" className="manual-lead-secondary" onClick={() => setConfirmando(null)} disabled={redefinindo}>
+                Cancelar
+              </button>
+              <button type="button" className="panel-refresh" onClick={() => void confirmarRedefinicao()} disabled={redefinindo}>
+                {redefinindo ? <RefreshCw size={17} /> : <KeyRound size={17} />}
+                Redefinir senha
+              </button>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {senhaTemporaria ? (
+        <section
+          className="panel-surface admin-create-card"
+          role="status"
+          aria-labelledby="senha-temporaria-titulo"
+          ref={(el) => { avisoRef.current = el; }}
+        >
+          <div className="admin-card-header">
+            <div>
+              <strong id="senha-temporaria-titulo">Senha temporária</strong>
+              <span>Senha redefinida.</span>
+            </div>
+          </div>
+          <div className="admin-create-form">
+            <p className="manual-lead-wide">
+              Passe esta senha para {senhaTemporaria.nome}. Ela aparece só agora. No primeiro acesso, o sistema pede uma senha nova.
+            </p>
+            <div className="webchat-snippet manual-lead-wide">
+              <div className="webchat-snippet-head">
+                <span>Senha de {senhaTemporaria.nome}</span>
+                <button type="button" className="webchat-copy" onClick={() => void copiarSenha()}>
+                  {copiado ? <Check size={14} /> : <Copy size={14} />}
+                  {copiado ? 'Copiado' : 'Copiar'}
+                </button>
+              </div>
+              <pre style={{ fontSize: 20, letterSpacing: '0.06em' }}>{senhaTemporaria.senha}</pre>
+            </div>
+            <div className="manual-lead-actions">
+              <button type="button" className="manual-lead-secondary" onClick={fecharSenha}>
+                Fechar
+              </button>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="panel-surface admin-create-card">
         <div className="admin-card-header">
@@ -1436,6 +1567,7 @@ function UsersSection({
               <th>Perfil</th>
               <th>Tenant</th>
               <th>Status</th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody>
@@ -1447,6 +1579,16 @@ function UsersSection({
                 <td>{roleLabel(user.role)}</td>
                 <td>{user.tenantId ?? 'Taskdun'}</td>
                 <td>{user.status}</td>
+                <td>
+                  {podeRedefinir(user) ? (
+                    <div className="admin-table-actions">
+                      <button type="button" className="webchat-copy" onClick={() => pedirRedefinicao(user)}>
+                        <KeyRound size={14} />
+                        Redefinir senha
+                      </button>
+                    </div>
+                  ) : null}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -3164,6 +3306,14 @@ export function Panel(): JSX.Element {
             onChange={setUserForm}
             onSubmit={() => void submitUser()}
             onRefresh={() => void refreshUsers()}
+            onResetPassword={async (userId) => {
+              try {
+                return await resetAdminUserPassword(userId, panelToken);
+              } catch (e) {
+                handleAccessError(e);
+                throw e;
+              }
+            }}
           />
         ) : activeSection === 'whatsapp' ? (
           <WhatsappSection

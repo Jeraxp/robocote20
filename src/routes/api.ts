@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { createHash, timingSafeEqual } from 'crypto';
 import type { Context } from 'hono';
-import { adminStore } from '../admin/store.js';
+import { adminStore, PasswordResetNotAllowedError, UserNotFoundError } from '../admin/store.js';
 import {
   canManageUsers,
   canManageWhatsapp,
@@ -13,7 +13,7 @@ import {
 } from '../auth/context.js';
 import { requirePanelAccess, resolveConfigTenantId } from './painelAcesso.js';
 import { authMiddleware } from '../auth/middleware.js';
-import { hashPassword, verifyPassword } from '../auth/password.js';
+import { generateTempPassword, hashPassword, verifyPassword } from '../auth/password.js';
 import {
   findUserForLogin,
   createSession,
@@ -874,6 +874,29 @@ api.post('/admin/users', async (c) => {
   } catch (e) {
     return c.json({ ok: false, error: (e as Error).message }, 409);
   }
+});
+
+api.post('/admin/users/:userId/reset-password', async (c) => {
+  const denied = requirePanelAccess(c);
+  if (denied) return denied;
+
+  const auth = resolveAuthContext(c);
+  if (!canManageUsers(auth)) {
+    return c.json({ ok: false, error: 'usuário sem permissão para gerenciar usuários' }, 403);
+  }
+
+  // A senha temporária existe só nesta resposta: nunca em log nem em audit_events.
+  c.header('Cache-Control', 'no-store');
+  const temporaryPassword = generateTempPassword();
+  const passwordHash = await hashPassword(temporaryPassword);
+  try {
+    await adminStore.resetUserPassword(auth, c.req.param('userId'), passwordHash);
+  } catch (e) {
+    if (e instanceof UserNotFoundError) return c.json({ ok: false, error: e.message }, 404);
+    if (e instanceof PasswordResetNotAllowedError) return c.json({ ok: false, error: e.message }, e.status);
+    throw e;
+  }
+  return c.json({ ok: true, temporaryPassword });
 });
 
 api.get('/admin/whatsapp-instances', async (c) => {
